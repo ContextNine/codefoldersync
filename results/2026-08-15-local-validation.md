@@ -51,7 +51,7 @@ TreeSync version: `0.13.0`.
 | --------------------- | --------- | ----------------------------------------------------------- |
 | alpha, Wootbook       | CLI ready | Linux x86-64, Git 2.53.0, Node 22.23.1, TreeSync logged out |
 | beta, Mac mini        | blocked   | SSH/WireGuard address `10.13.13.3` timed out                |
-| gamma, Worker Mac Air | CLI ready | macOS arm64, Git 2.50.1, Node 26.6.0, TreeSync logged out |
+| gamma, Worker Mac Air | CLI ready | macOS arm64, Git 2.50.1, Node 26.6.0, TreeSync logged out   |
 
 Worker Mac Air received the official v0.13.0 darwin/arm64 binary through TreeSync's checksum-verifying installer. Installed binary SHA-256:
 
