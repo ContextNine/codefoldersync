@@ -24,6 +24,8 @@ export interface JournalEntry {
   readonly commitOid?: string;
   readonly refName?: string;
   readonly backupRef?: string;
+  readonly indexTree?: string;
+  readonly indexBackupRef?: string;
   readonly source: "controller" | "peer";
   readonly detail?: string;
 }
@@ -50,11 +52,15 @@ export interface RequiredOperation {
   readonly operationId: string;
   readonly peer: PeerName;
   readonly repository: RepositoryName;
+  readonly action: string;
+  readonly relativePath?: string;
   readonly token?: string;
   readonly digest?: string;
   readonly commitOid?: string;
   readonly refName?: string;
   readonly backupRef?: string;
+  readonly indexTree?: string;
+  readonly indexBackupRef?: string;
 }
 
 export interface VerificationIssue {
@@ -68,6 +74,8 @@ export interface VerificationIssue {
 export interface VerificationResult {
   readonly passed: boolean;
   readonly manifestDigest: string;
+  readonly gitSemanticDigest: string;
+  readonly classifications: readonly string[];
   readonly issues: readonly VerificationIssue[];
   readonly requiredOperations: number;
   readonly recoveredOperations: number;

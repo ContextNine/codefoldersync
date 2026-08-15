@@ -31,6 +31,7 @@ import {
   type ScenarioResult,
   type VerificationResult,
 } from "./types.js";
+import { enforcePeerAgreement } from "./verifier.js";
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -44,6 +45,7 @@ interface RemoteOperationResult {
 
 interface SnapshotResult {
   readonly manifestDigest: string;
+  readonly gitSemanticDigest: string;
   readonly repositories: Readonly<
     Record<RepositoryName, { readonly valid: boolean }>
   >;
@@ -234,7 +236,8 @@ async function liveSerial(
   const active: PeerName[] = [];
   for (const peerName of peerNames) {
     const peer = findPeer(config, peerName);
-    for (const repository of repositoryNames) {
+    service(peer, "start");
+    for (const [repositoryIndex, repository] of repositoryNames.entries()) {
       runWrite(
         peer,
         runId,
@@ -242,6 +245,21 @@ async function liveSerial(
         `serial-${peerName}-${repository}-file`,
         `handoff/${peerName}.txt`,
         journal,
+      );
+      runWrite(
+        peer,
+        runId,
+        repository,
+        `serial-${peerName}-${repository}-executable`,
+        `bin/run-${peerName}.sh`,
+        journal,
+      );
+      runMetadata(
+        peer,
+        runId,
+        repository,
+        "chmod-executable",
+        `bin/run-${peerName}.sh`,
       );
       runCommit(
         peer,
@@ -252,8 +270,11 @@ async function liveSerial(
         `commits/${peerName}.txt`,
         journal,
       );
+      if (repositoryIndex === 0) {
+        service(peer, "stop");
+        service(peer, "start");
+      }
     }
-    service(peer, "start");
     active.push(peerName);
     await waitForConvergence(config, runId, active);
   }
@@ -387,7 +408,79 @@ async function liveConflict(
         `commits/${peerName}.txt`,
         journal,
       );
+      runWrite(
+        peer,
+        runId,
+        "coral",
+        `conflict-${peerName}-unstaged`,
+        "working.txt",
+        journal,
+      );
+      runWrite(
+        peer,
+        runId,
+        "coral",
+        `conflict-${peerName}-staged`,
+        "staged.txt",
+        journal,
+      );
+      runStage(
+        peer,
+        runId,
+        "coral",
+        `conflict-${peerName}-index`,
+        "staged.txt",
+        journal,
+      );
+      runWrite(
+        peer,
+        runId,
+        "coral",
+        `conflict-${peerName}-untracked`,
+        `state/${peerName}-untracked.txt`,
+        journal,
+      );
     }
+    runWrite(
+      findPeer(config, "alpha"),
+      runId,
+      "birch",
+      "conflict-alpha-modify-delete",
+      "docs/modify-delete.md",
+      journal,
+    );
+    runDelete(
+      findPeer(config, "beta"),
+      runId,
+      "birch",
+      "conflict-beta-delete-modified",
+      "docs/modify-delete.md",
+      journal,
+    );
+    runDelete(
+      findPeer(config, "beta"),
+      runId,
+      "birch",
+      "conflict-beta-delete-collision-file",
+      "docs/collision",
+      journal,
+    );
+    runWrite(
+      findPeer(config, "beta"),
+      runId,
+      "birch",
+      "conflict-beta-directory-child",
+      "docs/collision/beta-child.txt",
+      journal,
+    );
+    runWrite(
+      findPeer(config, "gamma"),
+      runId,
+      "birch",
+      "conflict-gamma-collision-file",
+      "docs/collision",
+      journal,
+    );
   }
   for (const peerName of ["alpha", "gamma", "beta"] as const) {
     service(findPeer(config, peerName), "start");
@@ -410,11 +503,30 @@ async function liveChurn(
     const peer = findPeer(config, peerName);
     const repository = repositoryNames[index];
     if (repository === undefined) throw new Error("Missing churn repository");
-    const planned = Array.from({ length: 40 }, (_, operation) => ({
-      operationId: `churn-${peerName}-${operation}`,
-      action: "write",
-      relativePath: `churn/${peerName}/operation-${operation}.txt`,
-    }));
+    const operationKinds = [
+      "create",
+      "rename",
+      "chmod",
+      "stage",
+      "unstage",
+      "append",
+      "replace",
+    ] as const;
+    const planned = Array.from({ length: 40 }, (_, operation) => {
+      const kind = operationKinds[operation % operationKinds.length];
+      if (kind === undefined) throw new Error("Invalid churn operation kind");
+      return {
+        operationId: `churn-${peerName}-${operation}`,
+        action:
+          kind === "rename" || kind === "append" || kind === "replace"
+            ? kind
+            : "write",
+        relativePath:
+          kind === "rename"
+            ? `churn/${peerName}/renamed-${operation}.txt`
+            : `churn/${peerName}/operation-${operation}.txt`,
+      };
+    });
     for (const operation of planned)
       journal.append(
         controllerEntry(
@@ -427,6 +539,19 @@ async function liveChurn(
           { relativePath: operation.relativePath },
         ),
       );
+    const deleteOperationId = `churn-${peerName}-delete`;
+    const deleteRelativePath = "src/nested/file-7.txt";
+    journal.append(
+      controllerEntry(
+        runId,
+        peerName,
+        repository,
+        deleteOperationId,
+        "delete",
+        "planned",
+        { relativePath: deleteRelativePath },
+      ),
+    );
     const commitOperationId = `churn-${peerName}-commit`;
     const backupRef = `refs/treesync-harness/${peerName}/${commitOperationId}`;
     journal.append(
@@ -514,6 +639,108 @@ function runWrite(
       "write",
       "completed",
       { relativePath, ...result },
+    ),
+  );
+}
+
+function runDelete(
+  peer: PeerConfig,
+  runId: string,
+  repository: RepositoryName,
+  operationId: string,
+  relativePath: string,
+  journal: DurableJournal,
+): void {
+  const evidence = { relativePath, detail: "delete-intent" };
+  journal.append(
+    controllerEntry(
+      runId,
+      peer.name,
+      repository,
+      operationId,
+      "delete",
+      "planned",
+      evidence,
+    ),
+  );
+  runWorkerJson(peer, runId, "delete", [
+    "--peer",
+    peer.name,
+    "--repository",
+    repository,
+    "--operation",
+    operationId,
+    "--path",
+    relativePath,
+  ]);
+  journal.append(
+    controllerEntry(
+      runId,
+      peer.name,
+      repository,
+      operationId,
+      "delete",
+      "completed",
+      evidence,
+    ),
+  );
+}
+
+function runMetadata(
+  peer: PeerConfig,
+  runId: string,
+  repository: RepositoryName,
+  command: "chmod-executable",
+  relativePath: string,
+): void {
+  runWorkerJson(peer, runId, command, [
+    "--peer",
+    peer.name,
+    "--repository",
+    repository,
+    "--path",
+    relativePath,
+  ]);
+}
+
+function runStage(
+  peer: PeerConfig,
+  runId: string,
+  repository: RepositoryName,
+  operationId: string,
+  relativePath: string,
+  journal: DurableJournal,
+): void {
+  journal.append(
+    controllerEntry(
+      runId,
+      peer.name,
+      repository,
+      operationId,
+      "stage",
+      "planned",
+      { relativePath },
+    ),
+  );
+  const result = runWorkerJson(peer, runId, "stage", [
+    "--peer",
+    peer.name,
+    "--repository",
+    repository,
+    "--operation",
+    operationId,
+    "--path",
+    relativePath,
+  ]) as { readonly indexTree: string };
+  journal.append(
+    controllerEntry(
+      runId,
+      peer.name,
+      repository,
+      operationId,
+      "stage",
+      "completed",
+      { relativePath, indexTree: result.indexTree },
     ),
   );
 }
@@ -682,17 +909,25 @@ async function waitForConvergence(
       const digests = new Set(
         present.map((snapshot) => snapshot.manifestDigest),
       );
+      const semanticDigests = new Set(
+        present.map((snapshot) => snapshot.gitSemanticDigest),
+      );
       const valid = present.every((snapshot) =>
         Object.values(snapshot.repositories).every(
           (repository) => repository.valid,
         ),
       );
-      const digest = present[0]?.manifestDigest ?? "";
-      if (digests.size === 1 && valid && digest === previousDigest) {
+      const combinedDigest = `${present[0]?.manifestDigest ?? ""}:${present[0]?.gitSemanticDigest ?? ""}`;
+      if (
+        digests.size === 1 &&
+        semanticDigests.size === 1 &&
+        valid &&
+        combinedDigest === previousDigest
+      ) {
         matchingSamples += 1;
       } else {
         matchingSamples = 1;
-        previousDigest = digest;
+        previousDigest = combinedDigest;
       }
       if (matchingSamples >= config.quietSamples) return;
     } else {
@@ -782,7 +1017,7 @@ function collectVerification(
       "peer-aggregate.jsonl",
     ]) as VerificationResult;
   }
-  return verification;
+  return enforcePeerAgreement(verification);
 }
 
 function durableWrite(path: string, content: string): void {

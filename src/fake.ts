@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   readFileSync,
@@ -10,7 +11,14 @@ import { createFixture } from "./fixture.js";
 import { git } from "./git.js";
 import { DurableJournal, readJournal } from "./journal.js";
 import { digestManifest, buildManifest } from "./manifest.js";
-import { createCommit, writeCanary } from "./operations.js";
+import {
+  createCommit,
+  deletePath,
+  mutateCanary,
+  renameCanary,
+  stagePath,
+  writeCanary,
+} from "./operations.js";
 import { createRunRoot, type RunPaths } from "./paths.js";
 import {
   peerNames,
@@ -21,7 +29,7 @@ import {
   type ScenarioResult,
   type VerificationResult,
 } from "./types.js";
-import { verifyPeer } from "./verifier.js";
+import { enforcePeerAgreement, verifyPeer } from "./verifier.js";
 import { LeaseGuard } from "./guard.js";
 
 interface FakeRun {
@@ -82,13 +90,9 @@ export function runFakeScenario(input: {
       ),
     });
   }
-  const manifests = new Set(
-    peerNames.map((peer) => verification[peer].manifestDigest),
-  );
-  const passed =
-    manifests.size === 1 &&
-    peerNames.every((peer) => verification[peer].passed);
-  if (manifests.size !== 1) notes.push("Peer manifests did not converge.");
+  const agreedVerification = enforcePeerAgreement(verification);
+  const passed = peerNames.every((peer) => agreedVerification[peer].passed);
+  if (!passed) notes.push("Peer filesystem or Git semantics did not converge.");
   return {
     schemaVersion: 1,
     runId: input.runId,
@@ -99,7 +103,7 @@ export function runFakeScenario(input: {
     startedAt,
     finishedAt: new Date().toISOString(),
     verdict: passed ? "pass" : "product-failure",
-    verification,
+    verification: agreedVerification,
     notes,
   };
 }
@@ -151,6 +155,14 @@ function runSerial(run: FakeRun, runId: string): void {
         operationId: `serial-${peer}-${repository}-file`,
         relativePath: `handoff/${peer}.txt`,
       });
+      writeCanary(context(run, runId, peer, repository), {
+        operationId: `serial-${peer}-${repository}-executable`,
+        relativePath: `bin/run-${peer}.sh`,
+      });
+      chmodSync(
+        join(run.peers[peer].workspace, repository, "bin", `run-${peer}.sh`),
+        0o755,
+      );
       createCommit(context(run, runId, peer, repository), {
         operationId: `serial-${peer}-${repository}-commit`,
         branch: `serial/${peer}`,
@@ -165,8 +177,19 @@ function runSerial(run: FakeRun, runId: string): void {
 }
 
 function runConflict(run: FakeRun, runId: string, mode: ScenarioMode): void {
-  if (mode === "guarded") exerciseGuard(run);
+  if (mode === "guarded") {
+    exerciseGuard(run);
+    writeCanary(context(run, runId, "alpha", "atlas"), {
+      operationId: "guarded-alpha-shared",
+      relativePath: "src/shared.txt",
+    });
+    mirrorWorkspace(run.peers.alpha.workspace, run.peers.beta.workspace);
+    mirrorWorkspace(run.peers.alpha.workspace, run.peers.gamma.workspace);
+    return;
+  }
   const sharedVersions = new Map<PeerName, string>();
+  const workingVersions = new Map<PeerName, string>();
+  const stagedVersions = new Map<PeerName, string>();
   for (const peer of peerNames) {
     writeCanary(context(run, runId, peer, "atlas"), {
       operationId: `conflict-${peer}-shared`,
@@ -189,7 +212,59 @@ function runConflict(run: FakeRun, runId: string, mode: ScenarioMode): void {
       branch: `conflict/${peer}`,
       relativePath: `commits/${peer}.txt`,
     });
+    writeCanary(context(run, runId, peer, "coral"), {
+      operationId: `conflict-${peer}-unstaged`,
+      relativePath: "working.txt",
+    });
+    writeCanary(context(run, runId, peer, "coral"), {
+      operationId: `conflict-${peer}-staged`,
+      relativePath: "staged.txt",
+    });
+    stagePath(context(run, runId, peer, "coral"), {
+      operationId: `conflict-${peer}-index`,
+      relativePath: "staged.txt",
+      indexBackupRef: `refs/treesync-harness/index/${peer}`,
+    });
+    writeCanary(context(run, runId, peer, "coral"), {
+      operationId: `conflict-${peer}-untracked`,
+      relativePath: `state/${peer}-untracked.txt`,
+    });
+    workingVersions.set(
+      peer,
+      readFileSync(
+        join(run.peers[peer].workspace, "coral", "working.txt"),
+        "utf8",
+      ),
+    );
+    stagedVersions.set(
+      peer,
+      readFileSync(
+        join(run.peers[peer].workspace, "coral", "staged.txt"),
+        "utf8",
+      ),
+    );
   }
+
+  writeCanary(context(run, runId, "alpha", "birch"), {
+    operationId: "conflict-alpha-modify-delete",
+    relativePath: "docs/modify-delete.md",
+  });
+  deletePath(context(run, runId, "beta", "birch"), {
+    operationId: "conflict-beta-delete-modified",
+    relativePath: "docs/modify-delete.md",
+  });
+  deletePath(context(run, runId, "beta", "birch"), {
+    operationId: "conflict-beta-delete-collision-file",
+    relativePath: "docs/collision",
+  });
+  writeCanary(context(run, runId, "beta", "birch"), {
+    operationId: "conflict-beta-directory-child",
+    relativePath: "docs/collision/beta-child.txt",
+  });
+  writeCanary(context(run, runId, "gamma", "birch"), {
+    operationId: "conflict-gamma-collision-file",
+    relativePath: "docs/collision",
+  });
 
   const canonical = run.peers.gamma.workspace;
   for (const source of ["alpha", "beta"] as const) {
@@ -199,12 +274,43 @@ function runConflict(run: FakeRun, runId: string, mode: ScenarioMode): void {
       sourceRepository,
       `refs/heads/conflict/${source}:refs/heads/conflict/${source}`,
     ]);
+    git(join(canonical, "coral"), [
+      "fetch",
+      sourceRepository,
+      `refs/treesync-harness/index/${source}:refs/treesync-harness/index/${source}`,
+    ]);
     copyFileWithin(
       run.peers[source].workspace,
       canonical,
       `birch/offline/${source}.txt`,
     );
+    copyFileWithin(
+      run.peers[source].workspace,
+      canonical,
+      `coral/state/${source}-untracked.txt`,
+    );
   }
+  for (const source of ["alpha", "beta"] as const) {
+    writeFileSync(
+      join(canonical, "coral", `working (conflict from ${source}).txt`),
+      workingVersions.get(source) ?? "",
+    );
+    writeFileSync(
+      join(canonical, "coral", `staged (conflict from ${source}).txt`),
+      stagedVersions.get(source) ?? "",
+    );
+  }
+  copyFileWithin(
+    run.peers.alpha.workspace,
+    canonical,
+    "birch/docs/modify-delete.md",
+  );
+  copyFileWithin(
+    run.peers.beta.workspace,
+    canonical,
+    "birch/docs/collision/beta-child.txt",
+    "birch/docs/collision (conflict directory from beta)/beta-child.txt",
+  );
   for (const source of ["alpha", "beta"] as const) {
     const sidecar = join(
       canonical,
@@ -225,11 +331,40 @@ function runChurn(run: FakeRun, runId: string, mode: ScenarioMode): void {
     const repository = repositoryNames[index];
     if (peer === undefined || repository === undefined) continue;
     for (let operation = 0; operation < 18; operation += 1) {
-      writeCanary(context(run, runId, peer, repository), {
-        operationId: `churn-${peer}-${operation}`,
-        relativePath: `churn/${peer}/operation-${operation}.txt`,
-      });
+      const relativePath = `churn/${peer}/operation-${operation}.txt`;
+      const operationId = `churn-${peer}-${operation}`;
+      const kind = operation % 7;
+      if (kind === 1)
+        renameCanary(context(run, runId, peer, repository), {
+          operationId,
+          sourcePath: relativePath,
+          relativePath: `churn/${peer}/renamed-${operation}.txt`,
+        });
+      else if (kind === 5 || kind === 6)
+        mutateCanary(context(run, runId, peer, repository), {
+          operationId,
+          relativePath,
+          mutation: kind === 5 ? "append" : "replace",
+        });
+      else
+        writeCanary(context(run, runId, peer, repository), {
+          operationId,
+          relativePath,
+        });
+      const repositoryPath = join(run.peers[peer].workspace, repository);
+      if (kind === 2) {
+        chmodSync(join(repositoryPath, relativePath), 0o755);
+      } else if (kind === 3) {
+        git(repositoryPath, ["add", relativePath]);
+      } else if (kind === 4) {
+        git(repositoryPath, ["add", relativePath]);
+        git(repositoryPath, ["restore", "--staged", "--", relativePath]);
+      }
     }
+    deletePath(context(run, runId, peer, repository), {
+      operationId: `churn-${peer}-delete`,
+      relativePath: "src/nested/file-7.txt",
+    });
     createCommit(context(run, runId, peer, repository), {
       operationId: `churn-${peer}-commit`,
       branch: `churn/${peer}`,
@@ -308,8 +443,9 @@ function copyFileWithin(
   sourceRoot: string,
   destinationRoot: string,
   relativePath: string,
+  destinationRelativePath = relativePath,
 ): void {
-  const destination = join(destinationRoot, relativePath);
+  const destination = join(destinationRoot, destinationRelativePath);
   mkdirSync(dirname(destination), { recursive: true });
   writeFileSync(destination, readFileSync(join(sourceRoot, relativePath)));
 }

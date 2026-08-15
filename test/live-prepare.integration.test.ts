@@ -4,12 +4,15 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { git } from "../src/git.js";
 import { prepareLive } from "../src/live.js";
 import { validateRunRoot } from "../src/paths.js";
 import type { HarnessConfig, PeerName } from "../src/types.js";
@@ -61,6 +64,71 @@ test("live preparation deploys the peer worker only inside sentinel roots", () =
       true,
     );
     const alphaPaths = validateRunRoot(alpha.runBase, "prepare-test");
+    const churn = spawnSync(
+      process.execPath,
+      [
+        join(alphaPaths.tools, "peer-worker.js"),
+        "churn",
+        "--run-base",
+        alpha.runBase,
+        "--run",
+        "prepare-test",
+        "--peer",
+        "alpha",
+        "--repository",
+        "atlas",
+        "--count",
+        "14",
+        "--guarded",
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(churn.status, 0, churn.stderr);
+    const churnResult = JSON.parse(churn.stdout) as Array<{
+      readonly kind?: string;
+      readonly type: string;
+    }>;
+    assert.ok(churnResult.some((operation) => operation.kind === "append"));
+    assert.ok(churnResult.some((operation) => operation.kind === "replace"));
+    assert.ok(churnResult.some((operation) => operation.type === "delete"));
+    assert.equal(
+      existsSync(
+        join(alphaPaths.workspace, "atlas", "churn/alpha/renamed-1.txt"),
+      ),
+      true,
+    );
+    assert.notEqual(
+      statSync(
+        join(alphaPaths.workspace, "atlas", "churn/alpha/operation-2.txt"),
+      ).mode & 0o111,
+      0,
+    );
+    assert.match(
+      readFileSync(
+        join(alphaPaths.workspace, "atlas", "churn/alpha/operation-5.txt"),
+        "utf8",
+      ),
+      /append baseline[\s\S]+append payload/,
+    );
+    assert.doesNotMatch(
+      readFileSync(
+        join(alphaPaths.workspace, "atlas", "churn/alpha/operation-6.txt"),
+        "utf8",
+      ),
+      /replace baseline/,
+    );
+    assert.equal(
+      existsSync(join(alphaPaths.workspace, "atlas", "src/nested/file-7.txt")),
+      false,
+    );
+    assert.equal(
+      git(join(alphaPaths.workspace, "atlas"), [
+        "rev-parse",
+        "--verify",
+        "refs/treesync-harness/alpha/churn-alpha-commit",
+      ]).status,
+      0,
+    );
     writeFileSync(
       join(alphaPaths.control, "test-heartbeat.json"),
       `${JSON.stringify({ expiresAt: Date.now() + 100 })}\n`,

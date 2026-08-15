@@ -12,6 +12,8 @@ test("report summarizes machine-readable verification without raw logs", () => {
     const verification: VerificationResult = {
       passed: true,
       manifestDigest: "digest",
+      gitSemanticDigest: "git-digest",
+      classifications: [],
       issues: [],
       requiredOperations: 3,
       recoveredOperations: 3,

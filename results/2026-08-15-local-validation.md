@@ -17,7 +17,7 @@ Result:
 ```text
 format: pass
 typecheck: pass
-tests: 21 passed, 0 failed
+tests: 24 passed, 0 failed
 ```
 
 The test suite covers:
@@ -27,6 +27,10 @@ The test suite covers:
 - guarded churn fake scenario;
 - injected completed-operation loss rejected on all three peers;
 - missing file canary detection;
+- token-preserving byte alteration and unexplained path movement rejected;
+- modify/delete outcomes classified and unapplied delete intent rejected;
+- divergent peer filesystem and Git semantic state rejected;
+- staged index trees required in the live index or an explicit backup ref;
 - surviving commit object with lost branch meaning rejected;
 - missing guard backup ref rejected;
 - controller/peer journal disagreement;
@@ -36,7 +40,8 @@ The test suite covers:
 - repo-scoped lease contention, stale baseline, peer uncertainty, and expiry;
 - heartbeat-expired child terminated before its delayed write;
 - unsafe run IDs and cleanup without a matching sentinel rejected;
-- compiled live worker deployed and executed in three isolated local run roots.
+- compiled live worker deployed and executed in three isolated local run roots;
+- compiled worker exercised create, append, replace, rename, delete, chmod, stage, unstage, branch, and commit operations.
 
 ## Fleet doctor
 
@@ -46,7 +51,7 @@ TreeSync version: `0.13.0`.
 | --------------------- | --------- | ----------------------------------------------------------- |
 | alpha, Wootbook       | CLI ready | Linux x86-64, Git 2.53.0, Node 22.23.1, TreeSync logged out |
 | beta, Mac mini        | blocked   | SSH/WireGuard address `10.13.13.3` timed out                |
-| gamma, Worker Mac Air | CLI ready | macOS arm64, Git 2.50.1, Node 26.6.0                        |
+| gamma, Worker Mac Air | CLI ready | macOS arm64, Git 2.50.1, Node 26.6.0, TreeSync logged out |
 
 Worker Mac Air received the official v0.13.0 darwin/arm64 binary through TreeSync's checksum-verifying installer. Installed binary SHA-256:
 

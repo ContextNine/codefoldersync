@@ -60,6 +60,21 @@ export function snapshotGit(
   };
 }
 
+export function digestGitSnapshots(snapshots: readonly GitSnapshot[]): string {
+  const semantic = snapshots
+    .map((snapshot) => ({
+      repository: snapshot.repository,
+      valid: snapshot.valid,
+      head: snapshot.head,
+      headOid: snapshot.headOid,
+      indexTree: snapshot.indexTree,
+      refs: snapshot.refs,
+      statusDigest: snapshot.statusDigest,
+    }))
+    .sort((left, right) => left.repository.localeCompare(right.repository));
+  return createHash("sha256").update(JSON.stringify(semantic)).digest("hex");
+}
+
 export function requiredCommitExists(
   repositoryPath: string,
   commitOid: string,

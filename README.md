@@ -11,7 +11,7 @@ The harness does not target existing code. Every mutation stays below a sentinel
 
 ## What it verifies
 
-- regular-file bytes and executable mode;
+- exact regular-file bytes, expected paths, recognized conflict sidecars, and executable mode;
 - commits, trees, fully qualified refs, backup refs, index trees, worktrees, and `git fsck --full`;
 - staged, unstaged, untracked, and committed changes;
 - recognized TreeSync conflict sidecars by content, not filename alone;
@@ -38,7 +38,7 @@ pnpm check
 pnpm harness help
 ```
 
-`pnpm check` runs formatting, strict TypeScript, 21 focused tests, all fake scenarios, injected-loss rejection, live preparation in three local roots, heartbeat termination, and report generation.
+`pnpm check` runs formatting, strict TypeScript, 24 focused tests, all fake scenarios, injected-loss rejection, live preparation in three local roots, mixed remote-worker churn, heartbeat termination, and report generation.
 
 ## Fleet workflow
 

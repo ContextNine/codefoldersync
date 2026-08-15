@@ -1,13 +1,26 @@
 #!/usr/bin/env node
 
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createFixture } from "./fixture.js";
-import { snapshotGit } from "./git.js";
+import { digestGitSnapshots, git, snapshotGit } from "./git.js";
 import { DurableJournal, readJournal } from "./journal.js";
 import { buildManifest, digestManifest } from "./manifest.js";
-import { createCommit, writeCanary } from "./operations.js";
+import {
+  createCommit,
+  deletePath,
+  mutateCanary,
+  renameCanary,
+  stagePath,
+  writeCanary,
+} from "./operations.js";
 import { validateRunRoot } from "./paths.js";
 import {
   peerNames,
@@ -39,6 +52,15 @@ async function main(): Promise<void> {
       break;
     case "commit":
       commit(args);
+      break;
+    case "delete":
+      remove(args);
+      break;
+    case "stage":
+      stage(args);
+      break;
+    case "chmod-executable":
+      chmodExecutable(args);
       break;
     case "churn":
       churn(args);
@@ -96,21 +118,110 @@ function commit(args: readonly string[]): void {
   output(result);
 }
 
+function remove(args: readonly string[]): void {
+  const context = contextFrom(args);
+  deletePath(context, {
+    operationId: requiredOption(args, "--operation"),
+    relativePath: requiredOption(args, "--path"),
+  });
+  context.peerJournal.close();
+  output({ detail: "delete-intent" });
+}
+
+function stage(args: readonly string[]): void {
+  const context = contextFrom(args);
+  const result = stagePath(context, {
+    operationId: requiredOption(args, "--operation"),
+    relativePath: requiredOption(args, "--path"),
+  });
+  context.peerJournal.close();
+  output(result);
+}
+
+function chmodExecutable(args: readonly string[]): void {
+  const context = contextFrom(args);
+  chmodSync(
+    join(
+      context.peerPaths.workspace,
+      context.repository,
+      requiredOption(args, "--path"),
+    ),
+    0o755,
+  );
+  context.peerJournal.close();
+  output({ executable: true });
+}
+
 function churn(args: readonly string[]): void {
   const context = contextFrom(args);
   const count = integerOption(args, "--count");
   const results: unknown[] = [];
+  const repositoryPath = join(context.peerPaths.workspace, context.repository);
+  const operationKinds = [
+    "create",
+    "rename",
+    "chmod",
+    "stage",
+    "unstage",
+    "append",
+    "replace",
+  ] as const;
   for (let index = 0; index < count; index += 1) {
     const operationId = `churn-${context.peer}-${index}`;
+    const kind = index % operationKinds.length;
+    const operationKind = operationKinds[kind];
+    if (operationKind === undefined)
+      throw new Error("Invalid churn operation kind");
+    const relativePath = `churn/${context.peer}/operation-${index}.txt`;
+    const result =
+      operationKind === "rename"
+        ? renameCanary(context, {
+            operationId,
+            sourcePath: relativePath,
+            relativePath: `churn/${context.peer}/renamed-${index}.txt`,
+          })
+        : operationKind === "append" || operationKind === "replace"
+          ? mutateCanary(context, {
+              operationId,
+              relativePath,
+              mutation: operationKind,
+            })
+          : writeCanary(context, {
+              operationId,
+              relativePath,
+              contentPrefix: operationKind,
+            });
+    if (kind === 2) {
+      chmodSync(join(repositoryPath, relativePath), 0o755);
+    } else if (kind === 3) {
+      git(repositoryPath, ["add", relativePath]);
+    } else if (kind === 4) {
+      git(repositoryPath, ["add", relativePath]);
+      git(repositoryPath, ["restore", "--staged", "--", relativePath]);
+    }
     results.push({
       operationId,
-      type: "write",
-      ...writeCanary(context, {
-        operationId,
-        relativePath: `churn/${context.peer}/operation-${index}.txt`,
-      }),
+      type:
+        operationKind === "rename" ||
+        operationKind === "append" ||
+        operationKind === "replace"
+          ? operationKind
+          : "write",
+      kind: operationKind,
+      ...result,
     });
   }
+  const deleteOperationId = `churn-${context.peer}-delete`;
+  const deleteRelativePath = "src/nested/file-7.txt";
+  deletePath(context, {
+    operationId: deleteOperationId,
+    relativePath: deleteRelativePath,
+  });
+  results.push({
+    operationId: deleteOperationId,
+    type: "delete",
+    relativePath: deleteRelativePath,
+  });
   const operationId = `churn-${context.peer}-commit`;
   const guarded = args.includes("--guarded");
   const backupRef = `refs/treesync-harness/${context.peer}/${operationId}`;
@@ -130,13 +241,14 @@ function churn(args: readonly string[]): void {
 
 function snapshot(args: readonly string[]): void {
   const paths = pathsFrom(args);
+  const snapshots = repositoryNames.map((repository) =>
+    snapshotGit(repository, join(paths.workspace, repository)),
+  );
   output({
     manifestDigest: digestManifest(buildManifest(paths.workspace)),
+    gitSemanticDigest: digestGitSnapshots(snapshots),
     repositories: Object.fromEntries(
-      repositoryNames.map((repository) => [
-        repository,
-        snapshotGit(repository, join(paths.workspace, repository)),
-      ]),
+      snapshots.map((repository) => [repository.repository, repository]),
     ),
   });
 }

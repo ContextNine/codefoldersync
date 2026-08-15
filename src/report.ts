@@ -24,6 +24,13 @@ export function writeMarkdownReport(resultPath: string): string {
         `| ${peer} | ${verification.passed ? "yes" : "no"} | ${verification.requiredOperations} | ${verification.recoveredOperations} | ${verification.issues.map((issue) => issue.code).join(", ") || "none"} |`,
     ),
     "",
+    "## Classifications",
+    "",
+    ...Object.entries(result.verification).map(
+      ([peer, verification]) =>
+        `- ${peer}: ${verification.classifications.join(", ") || "none"}`,
+    ),
+    "",
     "## Notes",
     "",
     ...(result.notes.length === 0

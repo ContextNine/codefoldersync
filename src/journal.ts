@@ -94,11 +94,15 @@ export function reconcileJournals(
       const fingerprints = new Set(
         observed.map((entry) =>
           JSON.stringify({
+            action: entry.action,
+            relativePath: entry.relativePath,
             token: entry.token,
             digest: entry.digest,
             commitOid: entry.commitOid,
             refName: entry.refName,
             backupRef: entry.backupRef,
+            indexTree: entry.indexTree,
+            indexBackupRef: entry.indexBackupRef,
           }),
         ),
       );
@@ -107,6 +111,10 @@ export function reconcileJournals(
         operationId,
         peer: evidence.peer,
         repository: evidence.repository,
+        action: evidence.action,
+        ...(evidence.relativePath === undefined
+          ? {}
+          : { relativePath: evidence.relativePath }),
         ...(evidence.token === undefined ? {} : { token: evidence.token }),
         ...(evidence.digest === undefined ? {} : { digest: evidence.digest }),
         ...(evidence.commitOid === undefined
@@ -118,6 +126,12 @@ export function reconcileJournals(
         ...(evidence.backupRef === undefined
           ? {}
           : { backupRef: evidence.backupRef }),
+        ...(evidence.indexTree === undefined
+          ? {}
+          : { indexTree: evidence.indexTree }),
+        ...(evidence.indexBackupRef === undefined
+          ? {}
+          : { indexBackupRef: evidence.indexBackupRef }),
       });
       continue;
     }
