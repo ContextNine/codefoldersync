@@ -1,0 +1,28 @@
+{
+  "quietSamples": 2,
+  "quietIntervalMs": 5000,
+  "convergenceTimeoutMs": 600000,
+  "peers": [
+    {
+      "name": "alpha",
+      "host": "local",
+      "runBase": "/home/matthewderman/treesync-safety-harness-runs",
+      "treesyncBinary": "/home/matthewderman/.local/bin/treesync",
+      "nodeBinary": "/home/matthewderman/.local/bin/node"
+    },
+    {
+      "name": "beta",
+      "host": "matthewderman@10.13.13.3",
+      "runBase": "/Users/matthewderman/treesync-safety-harness-runs",
+      "treesyncBinary": "/Users/matthewderman/.local/bin/treesync",
+      "nodeBinary": "/opt/homebrew/bin/node"
+    },
+    {
+      "name": "gamma",
+      "host": "matthewderman@10.13.13.11",
+      "runBase": "/Users/matthewderman/treesync-safety-harness-runs",
+      "treesyncBinary": "/Users/matthewderman/.local/bin/treesync",
+      "nodeBinary": "/opt/homebrew/bin/node"
+    }
+  ]
+}
