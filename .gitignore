@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.cache/
+config.local.json
+results/*/raw/
+results/*/private/
+*.log
