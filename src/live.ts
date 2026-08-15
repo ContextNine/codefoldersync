@@ -217,6 +217,14 @@ export async function runLiveScenario(input: {
   };
 }
 
+export async function verifyLive(
+  config: HarnessConfig,
+  runId: string,
+): Promise<Readonly<Record<PeerName, VerificationResult>>> {
+  await waitForConvergence(config, runId, peerNames);
+  return collectVerification(config, runId);
+}
+
 async function liveSerial(
   config: HarnessConfig,
   runId: string,

@@ -17,7 +17,7 @@ Result:
 ```text
 format: pass
 typecheck: pass
-tests: 20 passed, 0 failed
+tests: 21 passed, 0 failed
 ```
 
 The test suite covers:

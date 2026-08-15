@@ -38,7 +38,7 @@ pnpm check
 pnpm harness help
 ```
 
-`pnpm check` runs formatting, strict TypeScript, 20 focused tests, all fake scenarios, injected-loss rejection, live preparation in three local roots, and heartbeat termination.
+`pnpm check` runs formatting, strict TypeScript, 21 focused tests, all fake scenarios, injected-loss rejection, live preparation in three local roots, heartbeat termination, and report generation.
 
 ## Fleet workflow
 

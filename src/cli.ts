@@ -5,7 +5,13 @@ import { resolve } from "node:path";
 import { loadConfig } from "./config.js";
 import { doctor } from "./doctor.js";
 import { runFakeScenario } from "./fake.js";
-import { enrollLive, prepareLive, runLiveScenario } from "./live.js";
+import {
+  enrollLive,
+  prepareLive,
+  runLiveScenario,
+  verifyLive,
+} from "./live.js";
+import { writeMarkdownReport } from "./report.js";
 import {
   type ScenarioMode,
   type ScenarioName,
@@ -41,6 +47,12 @@ async function main(): Promise<void> {
       break;
     case "scenario":
       await runScenario(args);
+      break;
+    case "verify":
+      await runVerify(args);
+      break;
+    case "report":
+      runReport(args);
       break;
     default:
       throw new Error(`Unknown command: ${command}`);
@@ -107,6 +119,22 @@ async function runScenario(commandArgs: readonly string[]): Promise<void> {
   writeResult(resultBase, result);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.verdict !== "pass") process.exitCode = 1;
+}
+
+async function runVerify(commandArgs: readonly string[]): Promise<void> {
+  const result = await verifyLive(
+    loadHarnessConfig(commandArgs),
+    requiredOption(commandArgs, "--run"),
+  );
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (Object.values(result).some((peer) => !peer.passed)) process.exitCode = 1;
+}
+
+function runReport(commandArgs: readonly string[]): void {
+  const path = writeMarkdownReport(
+    resolve(requiredOption(commandArgs, "--result")),
+  );
+  process.stdout.write(`${path}\n`);
 }
 
 function loadHarnessConfig(commandArgs: readonly string[]) {
@@ -177,5 +205,7 @@ Commands:
   harness enroll --config <path> --run <id>
   harness scenario <serial|conflict|churn> --adapter fake --mode <raw|guarded> --run <id> --seed <n> --base <absolute-path>
   harness scenario <serial|conflict|churn> --adapter treesync --mode <raw|guarded> --run <id> --seed <n> --config <path>
+  harness verify --config <path> --run <id>
+  harness report --result <result.json>
 `);
 }
