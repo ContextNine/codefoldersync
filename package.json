@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "codefoldersync": "dist/product-cli.js"
+  },
   "packageManager": "pnpm@10.15.0",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
+    "codefoldersync": "tsx src/product-cli.ts",
     "harness": "tsx src/cli.ts",
     "build": "tsc -p tsconfig.build.json",
     "format": "prettier --write .",

@@ -6,8 +6,8 @@ import { loadConfig } from "./config.js";
 import { doctor } from "./doctor.js";
 import { runFakeScenario } from "./fake.js";
 import {
-  detachLive,
-  enrollLive,
+  closeLive,
+  configureLive,
   prepareLive,
   runLiveScenario,
   verifyLive,
@@ -43,11 +43,11 @@ async function main(): Promise<void> {
     case "prepare":
       runPrepare(args);
       break;
-    case "enroll":
-      await runEnroll(args);
+    case "configure":
+      await runConfigure(args);
       break;
-    case "detach":
-      runDetach(args);
+    case "close":
+      runClose(args);
       break;
     case "scenario":
       await runScenario(args);
@@ -63,12 +63,14 @@ async function main(): Promise<void> {
   }
 }
 
-function runDetach(commandArgs: readonly string[]): void {
-  detachLive(
+function runClose(commandArgs: readonly string[]): void {
+  closeLive(
     loadHarnessConfig(commandArgs),
     requiredOption(commandArgs, "--run"),
   );
-  process.stdout.write("Stopped peer daemons and detached local folders.\n");
+  process.stdout.write(
+    "All clients are clean; test fixtures and history were preserved.\n",
+  );
 }
 
 function runDoctor(commandArgs: readonly string[]): void {
@@ -86,13 +88,13 @@ function runPrepare(commandArgs: readonly string[]): void {
   );
 }
 
-async function runEnroll(commandArgs: readonly string[]): Promise<void> {
-  await enrollLive(
+async function runConfigure(commandArgs: readonly string[]): Promise<void> {
+  const folderId = await configureLive(
     loadHarnessConfig(commandArgs),
     requiredOption(commandArgs, "--run"),
   );
   process.stdout.write(
-    "Enrollment and initial three-peer convergence passed.\n",
+    `${JSON.stringify({ configured: true, folderId }, null, 2)}\n`,
   );
 }
 
@@ -214,8 +216,8 @@ function printHelp(): void {
 Commands:
   harness doctor --config <path>
   harness prepare --config <path> --run <id> --seed <n>
-  harness enroll --config <path> --run <id>
-  harness detach --config <path> --run <id>
+  harness configure --config <path> --run <id>
+  harness close --config <path> --run <id>
   harness scenario <serial|conflict|churn> --adapter fake --mode <raw|guarded> --run <id> --seed <n> --base <absolute-path>
   harness scenario <serial|conflict|churn> --adapter codefoldersync --mode <raw|guarded> --run <id> --seed <n> --config <path>
   harness verify --config <path> --run <id>

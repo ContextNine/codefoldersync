@@ -85,8 +85,6 @@ export interface PeerConfig {
   readonly name: PeerName;
   readonly host: "local" | string;
   readonly runBase: string;
-  readonly codefoldersyncBinary: string;
-  readonly codefoldersyncHome: "run" | string;
   readonly nodeBinary: string;
 }
 

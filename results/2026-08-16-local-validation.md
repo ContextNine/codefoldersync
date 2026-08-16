@@ -1,76 +1,54 @@
-# Local validation, 2026-08-16
+# CodeFolderSync local validation, 2026-08-16
 
-## Result
+## Outcome
 
-The renamed deterministic core, three-peer topology, run-scoped account isolation, foreground-daemon controller, and live preparation path pass locally. Live scenarios await the source account's browser consent callback.
+The native CodeFolderSync engine and three-peer live adapter pass locally without an external service.
 
-## Automated checks
+The implementation uses local peer IDs, an operator-chosen local or SSH hub, immutable whole-repository snapshots, per-repository compare-and-swap heads, durable recovery snapshots, and explicit divergence resolution.
 
-Command:
+## Proven behavior
+
+- serial alpha → beta → gamma handoff preserves exact files, executable modes, Git refs, index state, uncommitted work, and untracked files;
+- simultaneous alpha/atlas and beta/birch publication converges without global folder serialization;
+- simultaneous edits to one repository preserve every complete repository state, leave blocked workspaces untouched, and require explicit resolution;
+- recovered divergent snapshots pass digest validation and `git fsck --full` before resolution;
+- both `--take remote` and `--take local` retain the unselected state in immutable history;
+- 40-operation workers on three independent repositories converge after create, rename, chmod, stage, unstage, append, replace, delete, commit, and branch/ref changes;
+- repeated fresh CLI processes converge, proving process-local cache is not the source of agreement;
+- Git observation uses `--no-optional-locks`, preventing the verifier itself from changing the synchronized index;
+- an altered immutable snapshot is rejected;
+- deliberate completed-operation loss is rejected on every peer;
+- a surviving Git object without its required ref meaning is rejected;
+- heartbeat expiry terminates a delayed writer before mutation;
+- unsafe run roots and cleanup targets are rejected.
+
+## Commands
 
 ```bash
-pnpm check
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm codefoldersync --help
 ```
 
-Result:
+The native live integration test creates three isolated clients and runs serial, raw conflict, and guarded churn scenarios through the actual product CLI. Temporary roots are removed only after assertions complete.
 
-```text
-format: pass
-typecheck: pass
-tests: 25 passed, 0 failed
-```
+## Fleet acceptance
 
-The test suite covers:
+Alpha and beta ran as isolated clients on Wootbook. Gamma and each run-scoped hub ran on Worker Mac Air over WireGuard SSH. Worker Mac Air reported a case-insensitive filesystem; Wootbook reported case-sensitive filesystems. All peers reported the same UTF-8 bytes for the Unicode filename probe.
 
-- serial raw fake scenario;
-- conflict raw and guarded fake scenarios;
-- guarded churn fake scenario;
-- injected completed-operation loss rejected on all three peers;
-- missing file canary detection;
-- token-preserving byte alteration and unexplained path movement rejected;
-- modify/delete outcomes classified and unapplied delete intent rejected;
-- divergent peer filesystem and Git semantic state rejected;
-- staged index trees required in the live index or an explicit backup ref;
-- surviving commit object with lost branch meaning rejected;
-- missing guard backup ref rejected;
-- controller/peer journal disagreement;
-- lost SSH acknowledgement recovered from peer witness;
-- ambiguous started work rejected;
-- explicit interruption classified without becoming completed;
-- repo-scoped lease contention, stale baseline, peer uncertainty, and expiry;
-- heartbeat-expired child terminated before its delayed write;
-- unsafe run IDs and cleanup without a matching sentinel rejected;
-- compiled live worker deployed and executed in three isolated local run roots;
-- sentinel-owned foreground daemon start and exact-PID stop;
-- compiled worker exercised create, append, replace, rename, delete, chmod, stage, unstage, branch, and commit operations.
+| Scenario                   | Run                                  | Required/recovered | Filesystem digest | Git semantic digest | Verdict |
+| -------------------------- | ------------------------------------ | -----------------: | ----------------- | ------------------- | ------- |
+| delayed serial handoff     | `native-fleet-serial-20260816-003`   |     27/27 per peer | `0ebf8992…30bce`  | `aa3d74ac…ed57`     | pass    |
+| same-repository divergence | `native-fleet-conflict-20260816-001` |       6/6 per peer | `17b66915…41b7b`  | `1bfc4273…18922`    | pass    |
+| parallel guarded churn     | `native-fleet-churn-20260816-001`    |   126/126 per peer | `f7466ea9…cd861`  | `39b7be90…9c45d`    | pass    |
 
-## Fleet doctor
+The conflict run recovered and Git-validated all three divergent `atlas` repositories before resolution. Gamma selected remote, beta selected local, both unselected states remained in immutable history, and the final clients converged.
 
-CodeFolderSync version: `0.13.0`.
+Evidence:
 
-| Peer  | Host                       | Result                                        |
-| ----- | -------------------------- | --------------------------------------------- |
-| alpha | Wootbook                   | v0.13.0, Linux x86-64, ready; consent pending |
-| beta  | Wootbook isolated run home | v0.13.0, Linux x86-64, ready                  |
-| gamma | Worker Mac Air             | v0.13.0, macOS arm64, reachable and ready     |
+- [serial result](native-fleet-serial-20260816-003/result.json) and [report](native-fleet-serial-20260816-003/report.md)
+- [conflict result](native-fleet-conflict-20260816-001/result.json) and [report](native-fleet-conflict-20260816-001/report.md)
+- [churn result](native-fleet-churn-20260816-001/result.json) and [report](native-fleet-churn-20260816-001/report.md)
 
-Worker Mac Air received the official v0.13.0 darwin/arm64 binary through CodeFolderSync's checksum-verifying installer. Installed binary SHA-256:
-
-```text
-d2a0d258445c39a8c125d7864c9f57a169fa248c2a2a97a620cae23ed1b18d50
-```
-
-Wootbook's v0.13.0 linux/amd64 binary SHA-256:
-
-```text
-7b377edf4e55bd4edb910f098498686840663fb1df49a26d41ec694641fcf7e7
-```
-
-## Remaining live gate
-
-1. Complete alpha's browser consent callback for the dedicated test account.
-2. Prepare a fresh run.
-3. Enroll beta and gamma through the non-capturing link/join pipe.
-4. Run serial raw, conflict raw, conflict guarded, and guarded churn using separate run IDs.
-
-No existing CodeFolderSync folder, code folder, or Git repository has been enrolled or changed.
+All three close checks reported clean clients. Test workspaces, immutable hub history, conflict snapshots, and recovery directories were preserved for diagnosis.

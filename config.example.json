@@ -7,24 +7,18 @@
       "name": "alpha",
       "host": "local",
       "runBase": "/home/matthewderman/codefoldersync-alpha-runs",
-      "codefoldersyncBinary": "/home/matthewderman/.local/bin/codefoldersync",
-      "codefoldersyncHome": "/home/matthewderman",
       "nodeBinary": "/home/matthewderman/.local/bin/node"
     },
     {
       "name": "beta",
       "host": "local",
       "runBase": "/home/matthewderman/codefoldersync-beta-runs",
-      "codefoldersyncBinary": "/home/matthewderman/.local/bin/codefoldersync",
-      "codefoldersyncHome": "run",
       "nodeBinary": "/home/matthewderman/.local/bin/node"
     },
     {
       "name": "gamma",
       "host": "matthewderman@10.13.13.11",
       "runBase": "/Users/matthewderman/codefoldersync-gamma-runs",
-      "codefoldersyncBinary": "/Users/matthewderman/.local/bin/codefoldersync",
-      "codefoldersyncHome": "run",
       "nodeBinary": "/opt/homebrew/bin/node"
     }
   ]

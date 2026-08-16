@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "runId": "native-fleet-conflict-20260816-001",
+  "scenario": "conflict",
+  "mode": "raw",
+  "adapter": "codefoldersync",
+  "seed": 61002,
+  "startedAt": "2026-08-16T08:18:39.290Z",
+  "finishedAt": "2026-08-16T08:23:17.620Z",
+  "verdict": "pass",
+  "verification": {
+    "alpha": {
+      "passed": true,
+      "manifestDigest": "17b6691506ee4d97a23bd287b0dbedf6e6eaba37795c6463f63452bd71341b7b",
+      "gitSemanticDigest": "1bfc4273938fb7a165f6e6662d0802549bfb107eda04608ec2029aa1b0518922",
+      "classifications": [
+        "repository-divergence-preserved",
+        "explicit-resolution"
+      ],
+      "issues": [],
+      "requiredOperations": 6,
+      "recoveredOperations": 6
+    },
+    "beta": {
+      "passed": true,
+      "manifestDigest": "17b6691506ee4d97a23bd287b0dbedf6e6eaba37795c6463f63452bd71341b7b",
+      "gitSemanticDigest": "1bfc4273938fb7a165f6e6662d0802549bfb107eda04608ec2029aa1b0518922",
+      "classifications": [
+        "repository-divergence-preserved",
+        "explicit-resolution"
+      ],
+      "issues": [],
+      "requiredOperations": 6,
+      "recoveredOperations": 6
+    },
+    "gamma": {
+      "passed": true,
+      "manifestDigest": "17b6691506ee4d97a23bd287b0dbedf6e6eaba37795c6463f63452bd71341b7b",
+      "gitSemanticDigest": "1bfc4273938fb7a165f6e6662d0802549bfb107eda04608ec2029aa1b0518922",
+      "classifications": [
+        "repository-divergence-preserved",
+        "explicit-resolution"
+      ],
+      "issues": [],
+      "requiredOperations": 6,
+      "recoveredOperations": 6
+    }
+  },
+  "notes": [
+    "Every product sync used a fresh CLI process; no process-local cache could create convergence.",
+    "All three divergent atlas repositories were recovered and Git-validated before explicit remote/local resolution."
+  ]
+}

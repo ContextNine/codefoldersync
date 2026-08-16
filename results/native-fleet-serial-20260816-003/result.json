@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "runId": "native-fleet-serial-20260816-003",
+  "scenario": "serial",
+  "mode": "raw",
+  "adapter": "codefoldersync",
+  "seed": 61001,
+  "startedAt": "2026-08-16T08:00:41.553Z",
+  "finishedAt": "2026-08-16T08:14:03.763Z",
+  "verdict": "pass",
+  "verification": {
+    "alpha": {
+      "passed": true,
+      "manifestDigest": "0ebf8992f4bc3810622c5c3ea666a315ac2fa8a6da402e284df929c81ca30bce",
+      "gitSemanticDigest": "aa3d74acdaabb7e65ce22fc50758dff121e0632bb70f13d25e1062bc8e72ed57",
+      "classifications": [],
+      "issues": [],
+      "requiredOperations": 27,
+      "recoveredOperations": 27
+    },
+    "beta": {
+      "passed": true,
+      "manifestDigest": "0ebf8992f4bc3810622c5c3ea666a315ac2fa8a6da402e284df929c81ca30bce",
+      "gitSemanticDigest": "aa3d74acdaabb7e65ce22fc50758dff121e0632bb70f13d25e1062bc8e72ed57",
+      "classifications": [],
+      "issues": [],
+      "requiredOperations": 27,
+      "recoveredOperations": 27
+    },
+    "gamma": {
+      "passed": true,
+      "manifestDigest": "0ebf8992f4bc3810622c5c3ea666a315ac2fa8a6da402e284df929c81ca30bce",
+      "gitSemanticDigest": "aa3d74acdaabb7e65ce22fc50758dff121e0632bb70f13d25e1062bc8e72ed57",
+      "classifications": [],
+      "issues": [],
+      "requiredOperations": 27,
+      "recoveredOperations": 27
+    }
+  },
+  "notes": [
+    "Every product sync used a fresh CLI process; no process-local cache could create convergence."
+  ]
+}

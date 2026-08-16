@@ -45,27 +45,12 @@ function parsePeer(input: unknown, index: number): PeerConfig {
     throw new Error(`Peer ${value.name} has an invalid host`);
   if (typeof value.runBase !== "string" || !isAbsolute(value.runBase))
     throw new Error(`Peer ${value.name} runBase must be absolute`);
-  if (
-    typeof value.codefoldersyncBinary !== "string" ||
-    !isAbsolute(value.codefoldersyncBinary)
-  )
-    throw new Error(`Peer ${value.name} codefoldersyncBinary must be absolute`);
-  if (
-    typeof value.codefoldersyncHome !== "string" ||
-    (value.codefoldersyncHome !== "run" &&
-      !isAbsolute(value.codefoldersyncHome))
-  )
-    throw new Error(
-      `Peer ${value.name} codefoldersyncHome must be absolute or "run"`,
-    );
   if (typeof value.nodeBinary !== "string" || !isAbsolute(value.nodeBinary))
     throw new Error(`Peer ${value.name} nodeBinary must be absolute`);
   return {
     name: value.name as PeerName,
     host: value.host,
     runBase: value.runBase,
-    codefoldersyncBinary: value.codefoldersyncBinary,
-    codefoldersyncHome: value.codefoldersyncHome,
     nodeBinary: value.nodeBinary,
   };
 }

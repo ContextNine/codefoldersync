@@ -27,8 +27,6 @@ test("live preparation deploys the peer worker only inside sentinel roots", () =
         name,
         host: "local" as const,
         runBase: join(parent, "runs"),
-        codefoldersyncBinary: "/bin/true",
-        codefoldersyncHome: parent,
         nodeBinary: process.execPath,
       };
     });

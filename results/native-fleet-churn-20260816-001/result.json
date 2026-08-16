@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "runId": "native-fleet-churn-20260816-001",
+  "scenario": "churn",
+  "mode": "guarded",
+  "adapter": "codefoldersync",
+  "seed": 61003,
+  "startedAt": "2026-08-16T08:28:03.249Z",
+  "finishedAt": "2026-08-16T08:32:07.757Z",
+  "verdict": "pass",
+  "verification": {
+    "alpha": {
+      "passed": true,
+      "manifestDigest": "f7466ea93917fb22591712cef25c6f04641378056daf7c7454922aa1466cd861",
+      "gitSemanticDigest": "39b7be90e6adec75593153b374cd17326c22a7057b9ef24b5d6a972f24e9c45d",
+      "classifications": [],
+      "issues": [],
+      "requiredOperations": 126,
+      "recoveredOperations": 126
+    },
+    "beta": {
+      "passed": true,
+      "manifestDigest": "f7466ea93917fb22591712cef25c6f04641378056daf7c7454922aa1466cd861",
+      "gitSemanticDigest": "39b7be90e6adec75593153b374cd17326c22a7057b9ef24b5d6a972f24e9c45d",
+      "classifications": [],
+      "issues": [],
+      "requiredOperations": 126,
+      "recoveredOperations": 126
+    },
+    "gamma": {
+      "passed": true,
+      "manifestDigest": "f7466ea93917fb22591712cef25c6f04641378056daf7c7454922aa1466cd861",
+      "gitSemanticDigest": "39b7be90e6adec75593153b374cd17326c22a7057b9ef24b5d6a972f24e9c45d",
+      "classifications": [],
+      "issues": [],
+      "requiredOperations": 126,
+      "recoveredOperations": 126
+    }
+  },
+  "notes": [
+    "Every product sync used a fresh CLI process; no process-local cache could create convergence.",
+    "Repo-scoped owners: alpha/atlas, beta/birch, gamma/coral."
+  ]
+}

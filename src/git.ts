@@ -3,6 +3,7 @@ import type { GitSnapshot, RepositoryName } from "./types.js";
 import { runCommand } from "./process.js";
 
 const fixtureIdentity = [
+  "--no-optional-locks",
   "-c",
   "user.name=CodeFolderSync Harness",
   "-c",
