@@ -5,12 +5,15 @@ import {
   existsSync,
   fsyncSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
+  rmSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { doctor } from "./doctor.js";
 import { runOnPeer, runOnPeerAsync, shellQuote } from "./executor.js";
@@ -858,7 +861,16 @@ function deployWorker(peer: PeerConfig, runId: string, dist: string): void {
     }
     return;
   }
-  runCommand("scp", ["-q", "-r", `${dist}/.`, `${peer.host}:${paths.tools}/`]);
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-deploy-"));
+  try {
+    const archive = join(temporary, "worker.tar.gz");
+    const remoteArchive = join(paths.control, "worker.tar.gz");
+    runCommand("tar", ["-C", dist, "-czf", archive, "."]);
+    runCommand("scp", ["-q", archive, `${peer.host}:${remoteArchive}`]);
+    runOnPeer(peer, "tar", ["-C", paths.tools, "-xzf", remoteArchive]);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 function runWorkerJson(
