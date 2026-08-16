@@ -84,7 +84,7 @@ export function prepareLive(
     deployWorker(peer, runId, dist);
     capabilities[peer.name] = runWorkerJson(peer, runId, "capabilities", []);
     const version = runProduct(peer, runId, ["--version"]);
-    if (!/^codefoldersync 0\.1\.0\s*$/u.test(version.stdout)) {
+    if (!/^codefoldersync 0\.2\.0\s*$/u.test(version.stdout)) {
       throw new Error(
         `Unexpected product build on ${peer.name}: ${version.stdout.trim()}`,
       );

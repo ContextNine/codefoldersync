@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 2,
+  "runId": "v2-fleet-20260816-001",
+  "finishedAt": "2026-08-16T12:20:43.000Z",
+  "verdict": "pass",
+  "isolation": {
+    "sentinelProtected": true,
+    "existingCodeRootsTouched": false,
+    "defaultConfigTouched": false,
+    "dailyDriverServiceTouched": false,
+    "hubMachine": "worker-mac-air"
+  },
+  "initialTree": {
+    "repositories": 3,
+    "smallFiles": 100000,
+    "verifiedFiles": 100007,
+    "directories": 114,
+    "symlinks": 9,
+    "events": 100108,
+    "objects": 200042,
+    "storedBytes": 26790002,
+    "elapsedSeconds": 70.64,
+    "maximumRssKiB": 931428,
+    "digest": "2ca154b75c56f58e45fc00c84baf10c241b41a1737c8e57b0582c5bfdc40ad53"
+  },
+  "acceleratedJoin": {
+    "eventsApplied": 100130,
+    "objectsPresent": 200120,
+    "elapsedSeconds": 46.78,
+    "conflicts": 0,
+    "digest": "2ca154b75c56f58e45fc00c84baf10c241b41a1737c8e57b0582c5bfdc40ad53"
+  },
+  "latency": {
+    "samples": 25,
+    "wireguardRoundTripMs": 541.21,
+    "p50Ms": 967.6334640000023,
+    "p95Ms": 1309.2066779999986,
+    "maximumMs": 1331.4674319999995,
+    "exactVersionsObserved": 25,
+    "conflicts": 0
+  },
+  "largeFile": {
+    "logicalBytes": 67108864,
+    "middleOffset": 33554432,
+    "publishedEvents": 1,
+    "uploadedObjects": 2,
+    "uploadedWireBytes": 283,
+    "maximumAllowedBytes": 8388608
+  },
+  "directoryRename": {
+    "descendants": 33300,
+    "publishedEvents": 1,
+    "uploadedObjects": 0,
+    "elapsedSeconds": 22.29
+  },
+  "conflict": {
+    "writers": 3,
+    "canonicalVersions": 1,
+    "conflictCopies": 2,
+    "allExactVersionsPresent": true,
+    "digest": "d358b3268f193dc0481b63ff899c9d6e81f3b23595e2e908a43a5d66f3500426"
+  },
+  "churn": {
+    "operations": 10000,
+    "regularSaves": 7798,
+    "atomicSaves": 975,
+    "executableSaves": 975,
+    "renames": 60,
+    "deletes": 60,
+    "symlinkRetargets": 60,
+    "modeChanges": 60,
+    "gitCommits": 12,
+    "files": 109889,
+    "directories": 126,
+    "symlinks": 69,
+    "conflicts": 0,
+    "digest": "1db90b73ed5907d8a08a3f7b4964ec7ff9191f65314c2bc596614de12ae0462c"
+  },
+  "final": {
+    "hubSequence": 110473,
+    "files": 109889,
+    "directories": 126,
+    "symlinks": 69,
+    "conflicts": 0,
+    "digest": "1581b7ce8206034acbcbcaf50118e934028ca78c99366c4d38dd4091f7890e17",
+    "peerDigestsEqual": true,
+    "gitSemanticDigestsEqual": true,
+    "gitFsckClean": 9
+  },
+  "services": {
+    "systemd": ["installed", "started", "stopped", "restarted", "uninstalled"],
+    "launchd": ["installed", "started", "stopped", "restarted", "uninstalled"],
+    "testDefinitionsAbsentAfterUninstall": true
+  },
+  "focusedV2Tests": 6,
+  "fullTestSuite": {
+    "tests": 31,
+    "passed": 31,
+    "failed": 0
+  },
+  "faultsCaughtAndCorrected": [
+    "initial publication was interrupted twice and resumed from the durable outbox",
+    "a watcher observed its own reserved apply-temporary path and was restricted to ignore only reserved event paths",
+    "rapid consecutive saves exposed a stale local causal baseline and gained an explicit regression test",
+    "four high-latency publish round trips missed the latency target and were replaced by one bounded object-plus-event exchange",
+    "the fleet Git generator exceeded its output buffer after a successful commit and resumed from the verified commit boundary"
+  ]
+}

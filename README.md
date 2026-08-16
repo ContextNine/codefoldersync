@@ -1,94 +1,170 @@
 # CodeFolderSync
 
-CodeFolderSync synchronizes a parent folder of Git repositories across your machines using your existing SSH access. It has no hosted service or signup.
+CodeFolderSync keeps a parent folder of Git repositories synchronized across your machines. It has no account, signup, browser flow, hosted control plane, or proprietary sync service. Peers use your existing SSH access and a hub directory on a machine you control.
 
-The safety rule is simple: different repositories may sync concurrently; one repository never gets merged file by file. If two peers change the same repository from the same baseline, CodeFolderSync stores both complete repository snapshots and blocks that repository until you choose which state becomes current.
+Ordinary files sync as soon as they are saved. CodeFolderSync does not perform line-level merging. If two machines change the same file from the same base, the hub keeps the first accepted version at the original path and preserves every other version beside it:
 
-## Install and set up
+```text
+settings.json
+settings.CODEFOLDERSYNC-CONFLICT.laptop.91fd30a2.json
+```
+
+The marker is deliberately grep-friendly:
+
+```bash
+rg --files ~/Code | rg 'CODEFOLDERSYNC-CONFLICT'
+find ~/Code -name '*CODEFOLDERSYNC-CONFLICT*'
+```
+
+## How it works
+
+- A native filesystem watcher queues a saved path immediately. A periodic metadata reconciliation catches missed or overflowed watcher events.
+- Regular files use streaming content-defined chunks. Unchanged chunks are never retransmitted.
+- New objects and one saved-file event travel in one bounded publish exchange over a persistent framed SSH process. Accepted baseline chunks are not resent.
+- Symlinks synchronize their exact target text and are never followed.
+- Directories have stable identities, so renaming a large directory is one metadata event rather than one operation per descendant.
+- Every accepted mutation is causally based and idempotently identified. The hub, not a client clock, chooses the canonical version.
+- `.git` data transfers incrementally but stages, validates, and swaps as one transaction. Concurrent Git states are preserved as explicit Git conflicts rather than merged file by file.
+- Local state, hub metadata, object bytes, the outbox, conflicts, and apply journals use durable SQLite or immutable content storage.
+
+The hub contains plaintext repository data and inherits the hub machine's filesystem permissions and backups. SSH authenticates and encrypts transport.
+
+## Install
+
+CodeFolderSync currently requires Node.js 22 or newer. Build and install a versioned copy:
 
 ```bash
 corepack pnpm install
 pnpm build
-pnpm link --global
-codefoldersync setup
+node dist/product-cli.js install
+~/.local/bin/codefoldersync --version
 ```
 
-The setup wizard asks for the code-folder path, a local or SSH hub path, and whether this peer creates or joins the folder. Existing SSH keys authenticate the connection.
+The installer copies the build to `~/.local/lib/codefoldersync/0.2.0/` and atomically activates `~/.local/bin/codefoldersync`. The wrapper records the absolute Node executable used during installation, so launchd/systemd and noninteractive shells do not depend on nvm or shell startup files.
 
-For automation, the same setup is available as flags:
+Install the same build on the hub machine before configuring an SSH hub. `upgrade` installs another versioned build, and `rollback --version <version>` only changes the active wrapper.
+
+## Setup wizard
+
+Run this on the first machine:
+
+```bash
+~/.local/bin/codefoldersync setup
+```
+
+The wizard asks whether to create or join, which parent folder to synchronize, where the local or SSH hub lives, and the peer name. It probes case behavior, Unicode aliases, atomic rename, fsync, and symlink support before saving configuration. It can install and start a per-folder user service at the end.
+
+There is no login step.
+
+For automation, use the same validation path with flags:
 
 ```bash
 codefoldersync setup \
   --mode create \
   --root /absolute/path/to/code \
-  --hub ssh://user@host/absolute/path/to/hub \
+  --hub ssh://user@hub-host/absolute/path/to/hub \
   --name my-code \
   --peer laptop
 ```
 
-The create result prints the folder ID. Use it to join another peer:
+The result prints a folder ID. On another machine, point an empty destination at the same hub:
 
 ```bash
 codefoldersync setup \
   --mode join \
   --folder-id <folder-id> \
   --root /absolute/path/to/empty/code \
-  --hub ssh://user@host/absolute/path/to/hub \
+  --hub ssh://user@hub-host/absolute/path/to/hub \
   --peer desktop
 ```
 
-## Routine use
+SSH hubs default to `~/.local/bin/codefoldersync` on the remote host. Advanced or test installations can override this with `--remote-command` and `--remote-node`.
+
+The synchronized root may contain only direct-child repositories with an in-tree `.git` directory, plus an optional `.codefoldersyncignore`. Product state and the hub must be outside that root and on the same filesystem as the root when atomic recovery requires it.
+
+## Routine operation
 
 ```bash
 codefoldersync doctor
 codefoldersync status
 codefoldersync sync
-codefoldersync daemon --interval 2
+codefoldersync verify --full
+codefoldersync service status
+codefoldersync service logs
 ```
 
-The daemon stays in the foreground for systemd, launchd, or another supervisor. Every sync command processes direct-child Git repositories independently.
+The foreground daemon is also available for a custom supervisor:
 
-When a repository is blocked:
+```bash
+codefoldersync daemon --config /absolute/path/to/config.json
+```
+
+The daemon is the only allowed writer for its configured folder. A mutating foreground command fails closed while the daemon is active; stop the service first for deliberate maintenance and start it again afterward.
+
+Manage the generated user-level launchd or systemd service with:
+
+```bash
+codefoldersync service install
+codefoldersync service start
+codefoldersync service restart
+codefoldersync service stop
+codefoldersync service uninstall
+```
+
+Uninstalling a service does not delete synchronized files, configuration, local objects, recovery data, or hub state.
+
+Repository membership and ignore rules are explicit:
+
+```bash
+codefoldersync repository add new-repo
+codefoldersync repository remove old-repo
+codefoldersync repository refresh
+codefoldersync ignore push
+codefoldersync ignore pull
+```
+
+Removing repository membership never deletes the repository from disk.
+
+## Conflicts and recovery
+
+List ordinary and Git conflicts:
 
 ```bash
 codefoldersync conflicts
 codefoldersync history atlas
-codefoldersync resolve atlas --take remote
-# or
-codefoldersync resolve atlas --take local
 ```
 
-Both states remain immutable and recoverable regardless of the choice:
+Ordinary-file conflicts already exist as normal sibling files and need no product-specific merge command. Inspect them, keep or combine the content you want, and delete the extra copy like any other file.
+
+Git metadata conflicts are whole validated `.git` states. Select one explicitly:
 
 ```bash
-codefoldersync recover <snapshot-id> --to /absolute/empty/path
+codefoldersync resolve-git <conflict-id> --take canonical
+codefoldersync resolve-git <conflict-id> --take conflict
 ```
 
-## V1 boundaries
+Recover any retained manifest without changing the synchronized folder:
 
-- Linux and macOS regular files only.
-- Each direct child must be a Git repository.
-- A complete repository, including `.git`, is one transaction.
-- Symlinks, special files, transient Git locks, path collisions, corruption, and ambiguous hub state stop sync.
-- SSH protects transport. Hub snapshots are plaintext and inherit the hub host's disk permissions.
-- Snapshots are full JSON bundles in v1. This favors a small correctness surface over large-repository efficiency.
+```bash
+codefoldersync recover <manifest-or-conflict-id> --to /absolute/empty/path
+```
 
-## Safety harness
+Offline edits remain in the durable outbox. Corrupt objects, unsafe paths, ambiguous local changes, protocol mismatch, disk errors, and failed Git validation stop affected work without replacing the local version.
 
-The repository includes a deterministic three-peer harness with exact file and Git-semantic verification, durable controller/peer journals, injected-loss rejection, repository leases, and heartbeat expiry.
+Garbage collection is report-only in V2:
+
+```bash
+codefoldersync gc --dry-run
+```
+
+Automatic deletion is disabled. `migrate-v1 --dry-run --root <path>` provides a read-only inventory for side-by-side migration to a fresh V2 folder and hub.
+
+## Verification
+
+The focused V2 suite contains six integration tests covering incremental chunks and symlinks, deterministic conflicts and directory moves, transactional Git states and corruption rejection, setup/install/services/repository membership, watcher latency, and three-peer churn. The repository also retains the earlier adversarial safety-harness tests.
 
 ```bash
 pnpm check
-pnpm harness doctor --config config.example.json
-pnpm harness prepare --config config.example.json --run live-serial-001 --seed 91001
-pnpm harness configure --config config.example.json --run live-serial-001
-pnpm harness scenario serial --adapter codefoldersync --mode raw \
-  --config config.example.json --run live-serial-001 --seed 91001
-pnpm harness close --config config.example.json --run live-serial-001
 ```
 
-`prepare` creates only a fresh sentinel-protected run root, builds the product, deploys it inside that root, and creates generated Git fixtures. `configure` creates per-run client state and an isolated hub. No user-global binary or configuration is changed.
-
-The required scenarios are serial delayed handoff, same-repository divergence with exact recovery, and sustained parallel churn across independent repositories. The fake adapter proves the verifier rejects deliberate loss; the native live adapter proves convergence happens through CodeFolderSync rather than directory copying.
-
-See [the current validation report](results/2026-08-16-local-validation.md).
+Fleet and scale evidence is committed under `results/`, including the 100k-file, sub-two-second latency, deterministic three-way conflict, and 10,000-operation V2 run. Tests use generated, sentinel-protected roots outside every machine's `~/Code`.
