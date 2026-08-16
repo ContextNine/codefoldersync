@@ -5,7 +5,7 @@ export type PeerName = (typeof peerNames)[number];
 export type RepositoryName = (typeof repositoryNames)[number];
 export type ScenarioName = "serial" | "conflict" | "churn";
 export type ScenarioMode = "raw" | "guarded";
-export type AdapterName = "fake" | "treesync";
+export type AdapterName = "fake" | "codefoldersync";
 export type OperationPhase =
   "planned" | "started" | "observed" | "completed" | "interrupted";
 
@@ -85,7 +85,8 @@ export interface PeerConfig {
   readonly name: PeerName;
   readonly host: "local" | string;
   readonly runBase: string;
-  readonly treesyncBinary: string;
+  readonly codefoldersyncBinary: string;
+  readonly codefoldersyncHome: "run" | string;
   readonly nodeBinary: string;
 }
 

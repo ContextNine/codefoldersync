@@ -65,7 +65,7 @@ test("controller and peer evidence disagreement is visible", () => {
 });
 
 test("durable journals round-trip entries", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-journal-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-journal-"));
   try {
     const path = join(temporary, "journal.jsonl");
     const journal = new DurableJournal(path);

@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { doctor } from "./doctor.js";
 import { runFakeScenario } from "./fake.js";
 import {
+  detachLive,
   enrollLive,
   prepareLive,
   runLiveScenario,
@@ -45,6 +46,9 @@ async function main(): Promise<void> {
     case "enroll":
       await runEnroll(args);
       break;
+    case "detach":
+      runDetach(args);
+      break;
     case "scenario":
       await runScenario(args);
       break;
@@ -57,6 +61,14 @@ async function main(): Promise<void> {
     default:
       throw new Error(`Unknown command: ${command}`);
   }
+}
+
+function runDetach(commandArgs: readonly string[]): void {
+  detachLive(
+    loadHarnessConfig(commandArgs),
+    requiredOption(commandArgs, "--run"),
+  );
+  process.stdout.write("Stopped peer daemons and detached local folders.\n");
 }
 
 function runDoctor(commandArgs: readonly string[]): void {
@@ -88,7 +100,7 @@ async function runScenario(commandArgs: readonly string[]): Promise<void> {
   const scenario = positional(commandArgs, 0);
   if (!isScenario(scenario)) throw new Error(`Invalid scenario: ${scenario}`);
   const adapter = option(commandArgs, "--adapter") ?? "fake";
-  if (adapter !== "fake" && adapter !== "treesync")
+  if (adapter !== "fake" && adapter !== "codefoldersync")
     throw new Error(`Invalid adapter: ${adapter}`);
   const mode = option(commandArgs, "--mode") ?? "raw";
   if (!isMode(mode)) throw new Error(`Invalid mode: ${mode}`);
@@ -197,14 +209,15 @@ function isMode(value: string): value is ScenarioMode {
 }
 
 function printHelp(): void {
-  process.stdout.write(`TreeSync safety harness
+  process.stdout.write(`CodeFolderSync safety harness
 
 Commands:
   harness doctor --config <path>
   harness prepare --config <path> --run <id> --seed <n>
   harness enroll --config <path> --run <id>
+  harness detach --config <path> --run <id>
   harness scenario <serial|conflict|churn> --adapter fake --mode <raw|guarded> --run <id> --seed <n> --base <absolute-path>
-  harness scenario <serial|conflict|churn> --adapter treesync --mode <raw|guarded> --run <id> --seed <n> --config <path>
+  harness scenario <serial|conflict|churn> --adapter codefoldersync --mode <raw|guarded> --run <id> --seed <n> --config <path>
   harness verify --config <path> --run <id>
   harness report --result <result.json>
 `);

@@ -10,8 +10,8 @@ export interface DoctorPeerResult {
   readonly architecture: string;
   readonly gitVersion: string;
   readonly nodeVersion: string;
-  readonly treesyncVersion: string;
-  readonly treesyncCapabilities: readonly string[];
+  readonly codefoldersyncVersion: string;
+  readonly codefoldersyncCapabilities: readonly string[];
   readonly freeKilobytes: number;
   readonly issues: readonly string[];
 }
@@ -23,8 +23,8 @@ printf 'OS\\t'; uname -s
 printf 'ARCH\\t'; uname -m
 printf 'GIT\\t'; git --version
 printf 'NODE\\t'; "$1" --version
-printf 'TREESYNC\\t'; "$2" --version
-for command in status start stop push link join; do
+printf 'CODEFOLDERSYNC\\t'; "$2" --version
+for command in status push link join daemon add remove; do
   if "$2" "$command" --help >/dev/null 2>&1; then printf 'CAP\\t%s\\n' "$command"; fi
 done
 df -Pk "$3" | awk 'END { printf "FREE\\t%s\\n", $(NF-2) }'
@@ -40,7 +40,7 @@ export function doctor(config: HarnessConfig): readonly DoctorPeerResult[] {
         probeScript,
         "sh",
         peer.nodeBinary,
-        peer.treesyncBinary,
+        peer.codefoldersyncBinary,
         dirname(peer.runBase),
       ],
       true,
@@ -62,9 +62,10 @@ export function doctor(config: HarnessConfig): readonly DoctorPeerResult[] {
       issues.push("git-unavailable");
     if ((fields.get("NODE")?.[0] ?? "").length === 0)
       issues.push("node-unavailable");
-    if ((fields.get("TREESYNC")?.[0] ?? "").length === 0)
-      issues.push("treesync-unavailable");
-    if (capabilities.length !== 6) issues.push("treesync-capability-mismatch");
+    if ((fields.get("CODEFOLDERSYNC")?.[0] ?? "").length === 0)
+      issues.push("codefoldersync-unavailable");
+    if (capabilities.length !== 7)
+      issues.push("codefoldersync-capability-mismatch");
     const freeKilobytes = Number(fields.get("FREE")?.[0] ?? 0);
     if (!Number.isFinite(freeKilobytes) || freeKilobytes < 1_000_000)
       issues.push("insufficient-free-space");
@@ -76,12 +77,18 @@ export function doctor(config: HarnessConfig): readonly DoctorPeerResult[] {
       architecture: fields.get("ARCH")?.[0] ?? "",
       gitVersion: fields.get("GIT")?.[0] ?? "",
       nodeVersion: fields.get("NODE")?.[0] ?? "",
-      treesyncVersion: fields.get("TREESYNC")?.[0] ?? "",
-      treesyncCapabilities: capabilities,
+      codefoldersyncVersion: normalizeVersion(
+        fields.get("CODEFOLDERSYNC")?.[0] ?? "",
+      ),
+      codefoldersyncCapabilities: capabilities,
       freeKilobytes,
       issues,
     };
   });
+}
+
+function normalizeVersion(value: string): string {
+  return /\b\d+\.\d+\.\d+(?:[-+][\w.-]+)?\b/.exec(value)?.[0] ?? value;
 }
 
 function parseFields(output: string): Map<string, string[]> {
@@ -107,8 +114,8 @@ function unavailable(peer: PeerName, issue: string): DoctorPeerResult {
     architecture: "",
     gitVersion: "",
     nodeVersion: "",
-    treesyncVersion: "",
-    treesyncCapabilities: [],
+    codefoldersyncVersion: "",
+    codefoldersyncCapabilities: [],
     freeKilobytes: 0,
     issues: [issue],
   };

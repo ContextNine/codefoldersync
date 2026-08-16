@@ -18,7 +18,7 @@ import { validateRunRoot } from "../src/paths.js";
 import type { HarnessConfig, PeerName } from "../src/types.js";
 
 test("live preparation deploys the peer worker only inside sentinel roots", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-live-prepare-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-live-prepare-"));
   try {
     const peers = (["alpha", "beta", "gamma"] as const).map((name) => {
       const parent = join(temporary, name);
@@ -27,7 +27,8 @@ test("live preparation deploys the peer worker only inside sentinel roots", () =
         name,
         host: "local" as const,
         runBase: join(parent, "runs"),
-        treesyncBinary: "/bin/true",
+        codefoldersyncBinary: "/bin/true",
+        codefoldersyncHome: parent,
         nodeBinary: process.execPath,
       };
     });
@@ -64,6 +65,40 @@ test("live preparation deploys the peer worker only inside sentinel roots", () =
       true,
     );
     const alphaPaths = validateRunRoot(alpha.runBase, "prepare-test");
+    const daemonBinary = join(temporary, "codefoldersync-test-daemon");
+    writeFileSync(
+      daemonBinary,
+      "#!/usr/bin/env node\nsetInterval(() => {}, 1000);\n",
+      { mode: 0o755 },
+    );
+    const serviceArgs = [
+      join(alphaPaths.tools, "peer-worker.js"),
+      "codefoldersync-service",
+      "--run-base",
+      alpha.runBase,
+      "--run",
+      "prepare-test",
+      "--action",
+      "start",
+      "--binary",
+      daemonBinary,
+      "--home",
+      join(alphaPaths.control, "codefoldersync-home"),
+    ];
+    const startedService = spawnSync(process.execPath, serviceArgs, {
+      encoding: "utf8",
+    });
+    assert.equal(startedService.status, 0, startedService.stderr);
+    assert.equal(JSON.parse(startedService.stdout).running, true);
+    const stoppedService = spawnSync(
+      process.execPath,
+      serviceArgs.map((value, index) =>
+        index > 0 && serviceArgs[index - 1] === "--action" ? "stop" : value,
+      ),
+      { encoding: "utf8" },
+    );
+    assert.equal(stoppedService.status, 0, stoppedService.stderr);
+    assert.equal(JSON.parse(stoppedService.stdout).running, false);
     const churn = spawnSync(
       process.execPath,
       [
@@ -125,7 +160,7 @@ test("live preparation deploys the peer worker only inside sentinel roots", () =
       git(join(alphaPaths.workspace, "atlas"), [
         "rev-parse",
         "--verify",
-        "refs/treesync-harness/alpha/churn-alpha-commit",
+        "refs/codefoldersync/alpha/churn-alpha-commit",
       ]).status,
       0,
     );

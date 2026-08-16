@@ -65,9 +65,11 @@ export function prepareLive(
         .join(" ")}`,
     );
   }
-  const versions = new Set(readiness.map((result) => result.treesyncVersion));
+  const versions = new Set(
+    readiness.map((result) => result.codefoldersyncVersion),
+  );
   if (versions.size !== 1)
-    throw new Error("All peers must run the same TreeSync version");
+    throw new Error("All peers must run the same CodeFolderSync version");
 
   runCommand("corepack", ["pnpm", "build"], { cwd: sourceRoot });
   const dist = join(sourceRoot, "dist");
@@ -90,7 +92,7 @@ export function prepareLive(
         preparedAt: new Date().toISOString(),
         versions: readiness.map((result) => ({
           peer: result.peer,
-          treesync: result.treesyncVersion,
+          codefoldersync: result.codefoldersyncVersion,
           git: result.gitVersion,
           node: result.nodeVersion,
         })),
@@ -111,47 +113,58 @@ export async function enrollLive(
   if (alpha.host !== "local")
     throw new Error("Alpha must be local for non-capturing enrollment");
   const alphaPaths = validateRunRoot(alpha.runBase, runId);
-  const alphaStatus = treesyncGlobalStatus(alpha);
+  const alphaStatus = codefoldersyncGlobalStatus(alpha, runId);
   if (alphaStatus.includes("logged in: no")) {
     throw new Error(
-      "Alpha is logged out. Complete `treesync login --name treesync-harness-alpha` interactively, then rerun enroll.",
+      "Alpha is logged out. Complete `codefoldersync login` interactively, then rerun enroll.",
     );
   }
-  assertNoExistingFolders(alpha, alphaPaths.workspace);
-  if (!folderIsRegistered(alpha, alphaPaths.workspace)) {
-    runOnPeer(alpha, alpha.treesyncBinary, [
+  assertNoExistingFolders(alpha, runId, alphaPaths.workspace);
+  if (!folderIsRegistered(alpha, runId, alphaPaths.workspace)) {
+    runCodeFolderSyncOnPeer(alpha, runId, [
       "add",
       alphaPaths.workspace,
       "--name",
-      `treesync-safety-${runId}`,
+      `codefoldersync-${runId}`,
     ]);
   }
-  runOnPeer(alpha, alpha.treesyncBinary, [
+  runCodeFolderSyncOnPeer(alpha, runId, [
     "push",
     alphaPaths.workspace,
     "--verbose",
   ]);
-  runOnPeer(alpha, alpha.treesyncBinary, ["start"]);
+  service(alpha, runId, "start");
 
   for (const peer of config.peers.filter(
     (candidate) => candidate.name !== "alpha",
   )) {
     const paths = validateRemoteRunRoot(peer, runId);
-    const status = treesyncGlobalStatus(peer);
+    const status = codefoldersyncGlobalStatus(peer, runId);
     if (!status.includes("logged in: no")) {
       throw new Error(
-        `${peer.name} already has TreeSync account state; refusing link/join to preserve existing registrations`,
+        `${peer.name} already has CodeFolderSync account state; refusing link/join to preserve existing registrations`,
       );
     }
-    assertNoExistingFolders(peer, paths.workspace);
+    assertNoExistingFolders(peer, runId, paths.workspace);
     await linkWithoutCapture(
       alpha,
       alphaPaths.workspace,
       peer,
       paths.workspace,
+      runId,
     );
+    service(peer, runId, "start");
   }
   await waitForConvergence(config, runId, peerNames);
+}
+
+export function detachLive(config: HarnessConfig, runId: string): void {
+  for (const peer of config.peers) {
+    const paths = validateRemoteRunRoot(peer, runId);
+    service(peer, runId, "stop");
+    if (folderIsRegistered(peer, runId, paths.workspace))
+      runCodeFolderSyncOnPeer(peer, runId, ["remove", paths.workspace]);
+  }
 }
 
 export async function runLiveScenario(input: {
@@ -197,8 +210,8 @@ export async function runLiveScenario(input: {
   }
   await waitForConvergence(input.config, input.runId, peerNames);
   const verification = collectVerification(input.config, input.runId);
-  for (const peer of input.config.peers) service(peer, "stop");
-  for (const peer of input.config.peers) service(peer, "start");
+  for (const peer of input.config.peers) service(peer, input.runId, "stop");
+  for (const peer of input.config.peers) service(peer, input.runId, "start");
   await waitForConvergence(input.config, input.runId, peerNames);
   const postRestart = collectVerification(input.config, input.runId);
   const passed = peerNames.every(
@@ -209,7 +222,7 @@ export async function runLiveScenario(input: {
     runId: input.runId,
     scenario: input.scenario,
     mode: input.mode,
-    adapter: "treesync",
+    adapter: "codefoldersync",
     seed: input.seed,
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -232,11 +245,13 @@ async function liveSerial(
   runId: string,
   journal: DurableJournal,
 ): Promise<void> {
-  for (const peer of config.peers) service(peer, "stop");
+  for (const peer of config.peers) service(peer, runId, "stop");
   const active: PeerName[] = [];
   for (const peerName of peerNames) {
     const peer = findPeer(config, peerName);
-    service(peer, "start");
+    service(peer, runId, "start");
+    if (active.length > 0)
+      await waitForConvergence(config, runId, [...active, peerName]);
     for (const [repositoryIndex, repository] of repositoryNames.entries()) {
       runWrite(
         peer,
@@ -271,8 +286,8 @@ async function liveSerial(
         journal,
       );
       if (repositoryIndex === 0) {
-        service(peer, "stop");
-        service(peer, "start");
+        service(peer, runId, "stop");
+        service(peer, runId, "start");
       }
     }
     active.push(peerName);
@@ -287,7 +302,7 @@ async function liveConflict(
   journal: DurableJournal,
   notes: string[],
 ): Promise<void> {
-  for (const peer of config.peers) service(peer, "stop");
+  for (const peer of config.peers) service(peer, runId, "stop");
   if (mode === "guarded") {
     const guard = new LeaseGuard();
     const snapshot = runSnapshot(findPeer(config, "alpha"), runId);
@@ -483,7 +498,7 @@ async function liveConflict(
     );
   }
   for (const peerName of ["alpha", "gamma", "beta"] as const) {
-    service(findPeer(config, peerName), "start");
+    service(findPeer(config, peerName), runId, "start");
     await delay(2_000);
   }
 }
@@ -495,8 +510,8 @@ async function liveChurn(
   journal: DurableJournal,
   notes: string[],
 ): Promise<void> {
-  for (const peer of config.peers) service(peer, "start");
-  service(findPeer(config, "gamma"), "stop");
+  for (const peer of config.peers) service(peer, runId, "start");
+  service(findPeer(config, "gamma"), runId, "stop");
   if (mode === "guarded")
     notes.push("repo-scoped owners: alpha/atlas beta/birch gamma/coral");
   const workloads = peerNames.map(async (peerName, index) => {
@@ -553,7 +568,7 @@ async function liveChurn(
       ),
     );
     const commitOperationId = `churn-${peerName}-commit`;
-    const backupRef = `refs/treesync-harness/${peerName}/${commitOperationId}`;
+    const backupRef = `refs/codefoldersync/${peerName}/${commitOperationId}`;
     journal.append(
       controllerEntry(
         runId,
@@ -593,10 +608,10 @@ async function liveChurn(
     }
   });
   await delay(500);
-  service(findPeer(config, "beta"), "stop");
-  service(findPeer(config, "beta"), "start");
+  service(findPeer(config, "beta"), runId, "stop");
+  service(findPeer(config, "beta"), runId, "start");
   await Promise.all(workloads);
-  service(findPeer(config, "gamma"), "start");
+  service(findPeer(config, "gamma"), runId, "start");
 }
 
 function runWrite(
@@ -822,7 +837,7 @@ function bootstrapRunRoot(peer: PeerConfig, runId: string): void {
     createdAt: new Date().toISOString(),
   });
   const script =
-    'set -eu; base="$1"; run="$2"; sentinel="$3"; root="$base/$run"; test ! -e "$root"; umask 077; mkdir -p "$root/workspace" "$root/control" "$root/tools"; printf "%s\\n" "$sentinel" > "$root/.treesync-safety-run.json"';
+    'set -eu; base="$1"; run="$2"; sentinel="$3"; root="$base/$run"; test ! -e "$root"; umask 077; mkdir -p "$root/workspace" "$root/control/codefoldersync-home" "$root/tools"; printf "%s\\n" "$sentinel" > "$root/.codefoldersync-run.json"';
   runOnPeer(peer, "/bin/sh", [
     "-c",
     script,
@@ -900,7 +915,7 @@ async function waitForConvergence(
     const snapshots = peers.map((name) => {
       const peer = findPeer(config, name);
       const paths = resolveRunPaths(peer.runBase, runId);
-      const status = treesyncStatus(peer, paths.workspace);
+      const status = codefoldersyncStatus(peer, runId, paths.workspace);
       if (!statusIsIdle(status)) return undefined;
       return runSnapshot(peer, runId);
     });
@@ -947,31 +962,42 @@ function statusIsIdle(status: string): boolean {
   return local !== undefined && remote !== undefined && local === remote;
 }
 
-function treesyncStatus(peer: PeerConfig, workspace: string): string {
-  const result = runOnPeer(
+function codefoldersyncStatus(
+  peer: PeerConfig,
+  runId: string,
+  workspace: string,
+): string {
+  const result = runCodeFolderSyncOnPeer(
     peer,
-    peer.treesyncBinary,
+    runId,
     ["status", workspace, "--once", "--no-color"],
     true,
   );
   if (result.status !== 0)
     throw new Error(
-      `TreeSync status failed on ${peer.name}: ${result.stderr.trim()}`,
+      `CodeFolderSync status failed on ${peer.name}: ${result.stderr.trim()}`,
     );
   return result.stdout;
 }
 
-function service(peer: PeerConfig, action: "start" | "stop"): void {
-  runOnPeer(peer, peer.treesyncBinary, [action]);
-  const status = runOnPeer(
-    peer,
-    peer.treesyncBinary,
-    ["service", "status", "--no-color"],
-    true,
-  );
-  const running = /background service:\s*running/i.test(status.stdout);
-  if ((action === "start" && !running) || (action === "stop" && running)) {
-    throw new Error(`TreeSync service did not ${action} on ${peer.name}`);
+function service(
+  peer: PeerConfig,
+  runId: string,
+  action: "start" | "stop",
+): void {
+  const result = runWorkerJson(peer, runId, "codefoldersync-service", [
+    "--action",
+    action,
+    "--binary",
+    peer.codefoldersyncBinary,
+    "--home",
+    codefoldersyncHome(peer, runId),
+  ]) as { readonly running: boolean };
+  if (
+    (action === "start" && !result.running) ||
+    (action === "stop" && result.running)
+  ) {
+    throw new Error(`CodeFolderSync service did not ${action} on ${peer.name}`);
   }
 }
 
@@ -998,7 +1024,10 @@ function collectVerification(
   const verification = {} as Record<PeerName, VerificationResult>;
   for (const peer of config.peers) {
     const paths = validateRemoteRunRoot(peer, runId);
-    if (peer.host !== "local") {
+    if (peer.name !== "alpha" && peer.host === "local") {
+      cpSync(controllerPath, join(paths.control, "controller.jsonl"));
+      cpSync(aggregatePath, join(paths.control, "peer-aggregate.jsonl"));
+    } else if (peer.host !== "local") {
       runCommand("scp", [
         "-q",
         controllerPath,
@@ -1030,52 +1059,87 @@ function durableWrite(path: string, content: string): void {
   }
 }
 
-function treesyncGlobalStatus(peer: PeerConfig): string {
-  const result = runOnPeer(
+function codefoldersyncGlobalStatus(peer: PeerConfig, runId: string): string {
+  const result = runCodeFolderSyncOnPeer(
     peer,
-    peer.treesyncBinary,
+    runId,
     ["status", "--once", "--no-color"],
     true,
   );
   if (result.status !== 0)
     throw new Error(
-      `TreeSync status failed on ${peer.name}: ${result.stderr.trim()}`,
+      `CodeFolderSync status failed on ${peer.name}: ${result.stderr.trim()}`,
     );
   return result.stdout;
 }
 
-function folderIsRegistered(peer: PeerConfig, workspace: string): boolean {
+function folderIsRegistered(
+  peer: PeerConfig,
+  runId: string,
+  workspace: string,
+): boolean {
   return (
-    runOnPeer(
+    runCodeFolderSyncOnPeer(
       peer,
-      peer.treesyncBinary,
+      runId,
       ["status", workspace, "--once", "--no-color"],
       true,
     ).status === 0
   );
 }
 
-function assertNoExistingFolders(peer: PeerConfig, workspace: string): void {
-  if (folderIsRegistered(peer, workspace)) return;
-  const result = runOnPeer(
+function assertNoExistingFolders(
+  peer: PeerConfig,
+  runId: string,
+  workspace: string,
+): void {
+  if (folderIsRegistered(peer, runId, workspace)) return;
+  const result = runCodeFolderSyncOnPeer(
     peer,
-    peer.treesyncBinary,
-    ["service", "status", "--no-color"],
+    runId,
+    ["status", "--once", "--no-color"],
     true,
   );
+  if (result.stdout.includes("logged in: no")) return;
   const count = /synced folders:\s*(\d+)/i.exec(result.stdout)?.[1];
   if (count !== "0") {
     throw new Error(
-      `${peer.name} has existing TreeSync folders or ambiguous service state; refusing to control its global daemon`,
+      `${peer.name} has existing CodeFolderSync folders or ambiguous service state; refusing to control its global daemon`,
     );
   }
+}
+
+function codefoldersyncHome(peer: PeerConfig, runId: string): string {
+  if (peer.codefoldersyncHome !== "run") return peer.codefoldersyncHome;
+  return join(
+    resolveRunPaths(peer.runBase, runId).control,
+    "codefoldersync-home",
+  );
+}
+
+function runCodeFolderSyncOnPeer(
+  peer: PeerConfig,
+  runId: string,
+  args: readonly string[],
+  allowFailure = false,
+) {
+  return runOnPeer(
+    peer,
+    "/usr/bin/env",
+    [
+      `HOME=${codefoldersyncHome(peer, runId)}`,
+      peer.codefoldersyncBinary,
+      ...args,
+    ],
+    allowFailure,
+  );
 }
 
 function validateRemoteRunRoot(peer: PeerConfig, runId: string) {
   const paths = resolveRunPaths(peer.runBase, runId);
   if (peer.host === "local") return validateRunRoot(peer.runBase, runId);
   const result = runOnPeer(peer, "/bin/cat", [
-    join(paths.root, ".treesync-safety-run.json"),
+    join(paths.root, ".codefoldersync-run.json"),
   ]);
   const value: unknown = JSON.parse(result.stdout);
   if (
@@ -1093,42 +1157,51 @@ async function linkWithoutCapture(
   alphaWorkspace: string,
   target: PeerConfig,
   targetWorkspace: string,
+  runId: string,
 ): Promise<void> {
   const source = spawn(
-    alpha.treesyncBinary,
-    ["link", "--name", `treesync-harness-${target.name}`, "--no-color"],
-    { cwd: alphaWorkspace, stdio: ["ignore", "pipe", "inherit"] },
+    alpha.codefoldersyncBinary,
+    ["link", "--name", `codefoldersync-${target.name}`, "--no-color"],
+    {
+      cwd: alphaWorkspace,
+      stdio: ["ignore", "pipe", "inherit"],
+      env: { ...process.env, HOME: codefoldersyncHome(alpha, runId) },
+    },
   );
   const script =
-    'set -eu; binary="$1"; destination="$2"; ticket=""; while IFS= read -r line; do case "$line" in *"treesync join "*) value=${line#*treesync join }; ticket=${value%% *};; esac; done; test -n "$ticket"; exec "$binary" join "$ticket" --path "$destination"';
-  const remoteCommand = [
+    'set -eu; binary="$1"; destination="$2"; home="$3"; export HOME="$home"; mkdir -p "$HOME"; ticket=""; while IFS= read -r line; do case "$line" in *" join "*) value=${line#* join }; ticket=${value%% *};; esac; done; test -n "$ticket"; exec "$binary" join "$ticket" --path "$destination" --no-daemon';
+  const command = [
     "/bin/sh",
     "-c",
     script,
     "sh",
-    target.treesyncBinary,
+    target.codefoldersyncBinary,
     targetWorkspace,
-  ]
-    .map(shellQuote)
-    .join(" ");
-  const join = spawn(
-    "ssh",
-    [
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=8",
-      target.host,
-      remoteCommand,
-    ],
-    { stdio: [source.stdout, "inherit", "inherit"] },
-  );
+    codefoldersyncHome(target, runId),
+  ];
+  const join =
+    target.host === "local"
+      ? spawn(command[0] ?? "/bin/sh", command.slice(1), {
+          stdio: [source.stdout, "inherit", "inherit"],
+        })
+      : spawn(
+          "ssh",
+          [
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            target.host,
+            command.map(shellQuote).join(" "),
+          ],
+          { stdio: [source.stdout, "inherit", "inherit"] },
+        );
   const [sourceStatus, joinStatus] = await Promise.all([
     waitForChild(source),
     waitForChild(join),
   ]);
   if (sourceStatus !== 0 || joinStatus !== 0)
-    throw new Error(`TreeSync link/join failed for ${target.name}`);
+    throw new Error(`CodeFolderSync link/join failed for ${target.name}`);
 }
 
 function waitForChild(child: ReturnType<typeof spawn>): Promise<number> {

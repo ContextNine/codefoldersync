@@ -11,7 +11,7 @@ import {
 } from "../src/paths.js";
 
 test("run roots require a matching sentinel before cleanup", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-paths-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-paths-"));
   try {
     const base = join(temporary, "runs");
     const paths = createRunRoot(base, "safe-run-1");
@@ -30,7 +30,7 @@ test("unsafe run IDs are rejected", () => {
 });
 
 test("cleanup refuses a root without the sentinel", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-paths-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-paths-"));
   try {
     assert.throws(() => removeRunRoot(temporary, "missing-run"));
   } finally {

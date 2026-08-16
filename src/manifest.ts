@@ -23,6 +23,7 @@ function walk(root: string, current: string, entries: ManifestEntry[]): void {
     if (path.split("/").includes(".git")) continue;
     const stat = lstatSync(absolute);
     if (stat.isDirectory()) {
+      if (name.startsWith(".")) continue;
       walk(root, absolute, entries);
       continue;
     }
@@ -58,7 +59,8 @@ function findTokenWithin(
     const path = relative(root, absolute).split(sep).join("/");
     const stat = lstatSync(absolute);
     if (stat.isDirectory()) {
-      if (name !== ".git") findTokenWithin(root, absolute, token, matches);
+      if (!name.startsWith("."))
+        findTokenWithin(root, absolute, token, matches);
       continue;
     }
     if (stat.isFile() && readFileSync(absolute).includes(token))

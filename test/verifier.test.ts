@@ -17,7 +17,7 @@ import { enforcePeerAgreement, verifyPeer } from "../src/verifier.js";
 import type { VerificationResult } from "../src/types.js";
 
 test("verifier detects lost bytes and lost ref meaning", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-verify-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-verify-"));
   try {
     const controllerPaths = createRunRoot(
       join(temporary, "controller"),
@@ -47,7 +47,7 @@ test("verifier detects lost bytes and lost ref meaning", () => {
       operationId: "lost-ref",
       branch: "verify/lost-ref",
       relativePath: "commits/lost-ref.txt",
-      backupRef: "refs/treesync-harness/alpha/lost-ref",
+      backupRef: "refs/codefoldersync/alpha/lost-ref",
     });
     controllerJournal.close();
     peerJournal.close();
@@ -64,7 +64,7 @@ test("verifier detects lost bytes and lost ref meaning", () => {
     git(join(peerPaths.workspace, "atlas"), [
       "update-ref",
       "-d",
-      "refs/treesync-harness/alpha/lost-ref",
+      "refs/codefoldersync/alpha/lost-ref",
     ]);
     const result = verifyPeer({
       paths: peerPaths,
@@ -115,7 +115,7 @@ test("cross-peer Git semantic divergence prevents a pass", () => {
 });
 
 test("verifier classifies preserved delete conflicts and backed-up index trees", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-semantics-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-semantics-"));
   try {
     const controllerPaths = createRunRoot(
       join(temporary, "controller"),
@@ -152,7 +152,7 @@ test("verifier classifies preserved delete conflicts and backed-up index trees",
     stagePath(context, {
       operationId: "preserved-index",
       relativePath: "preserved-index.txt",
-      indexBackupRef: "refs/treesync-harness/index/alpha",
+      indexBackupRef: "refs/codefoldersync/index/alpha",
     });
     git(join(peerPaths.workspace, "atlas"), ["reset"]);
     controllerJournal.close();
@@ -182,7 +182,7 @@ test("verifier classifies preserved delete conflicts and backed-up index trees",
 });
 
 test("verifier rejects unapplied deletes, altered canaries, and lost index meaning", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-loss-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-loss-"));
   try {
     const controllerPaths = createRunRoot(
       join(temporary, "controller"),

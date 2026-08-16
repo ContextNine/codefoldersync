@@ -15,7 +15,7 @@ const cases: readonly [ScenarioName, ScenarioMode][] = [
 
 for (const [scenario, mode] of cases) {
   test(`fake ${scenario} ${mode} preserves every completed operation`, () => {
-    const temporary = mkdtempSync(join(tmpdir(), "treesync-fake-"));
+    const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-fake-"));
     try {
       const result = runFakeScenario({
         base: temporary,
@@ -39,7 +39,7 @@ for (const [scenario, mode] of cases) {
 }
 
 test("injected completed-operation loss is rejected on every peer", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-fake-loss-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-fake-loss-"));
   try {
     const result = runFakeScenario({
       base: temporary,

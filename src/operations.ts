@@ -66,7 +66,7 @@ export function writeCanary(
   },
 ): { readonly token: string; readonly digest: string } {
   assertSafeRelativePath(input.relativePath);
-  const token = `TSH:${context.runId}:${input.operationId}:${context.peer}`;
+  const token = `CFS:${context.runId}:${input.operationId}:${context.peer}`;
   const content = `${input.contentPrefix ?? "generated"}\n${token}\n`;
   const evidence = { relativePath: input.relativePath, token };
   context.controllerJournal?.append(
@@ -120,7 +120,7 @@ export function mutateCanary(
   },
 ): { readonly token: string; readonly digest: string } {
   assertSafeRelativePath(input.relativePath);
-  const token = `TSH:${context.runId}:${input.operationId}:${context.peer}`;
+  const token = `CFS:${context.runId}:${input.operationId}:${context.peer}`;
   const destination = join(
     context.peerPaths.workspace,
     context.repository,
@@ -198,7 +198,7 @@ export function renameCanary(
 ): { readonly token: string; readonly digest: string } {
   assertSafeRelativePath(input.sourcePath);
   assertSafeRelativePath(input.relativePath);
-  const token = `TSH:${context.runId}:${input.operationId}:${context.peer}`;
+  const token = `CFS:${context.runId}:${input.operationId}:${context.peer}`;
   const evidence = { relativePath: input.relativePath, token };
   context.controllerJournal?.append(
     entry(
@@ -266,7 +266,7 @@ export function createCommit(
     entry(context, input.operationId, "commit", "started", "peer", basic),
   );
   git(repositoryPath, ["switch", "-c", input.branch]);
-  const token = `TSH:${context.runId}:${input.operationId}:${context.peer}`;
+  const token = `CFS:${context.runId}:${input.operationId}:${context.peer}`;
   const destination = join(repositoryPath, input.relativePath);
   mkdirSync(dirname(destination), { recursive: true });
   writeFileSync(destination, `${token}\n`);

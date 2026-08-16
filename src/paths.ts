@@ -11,7 +11,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const runIdPattern = /^[a-z0-9][a-z0-9-]{2,63}$/;
-export const sentinelName = ".treesync-safety-run.json";
+export const sentinelName = ".codefoldersync-run.json";
 
 export interface RunPaths {
   readonly root: string;

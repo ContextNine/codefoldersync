@@ -7,7 +7,7 @@ import { writeMarkdownReport } from "../src/report.js";
 import type { ScenarioResult, VerificationResult } from "../src/types.js";
 
 test("report summarizes machine-readable verification without raw logs", () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-report-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-report-"));
   try {
     const verification: VerificationResult = {
       passed: true,

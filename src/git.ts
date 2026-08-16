@@ -4,9 +4,9 @@ import { runCommand } from "./process.js";
 
 const fixtureIdentity = [
   "-c",
-  "user.name=TreeSync Harness",
+  "user.name=CodeFolderSync Harness",
   "-c",
-  "user.email=treesync-harness@invalid.example",
+  "user.email=codefoldersync@invalid.example",
 ] as const;
 
 export function git(

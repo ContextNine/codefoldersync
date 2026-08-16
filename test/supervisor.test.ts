@@ -6,7 +6,7 @@ import test from "node:test";
 import { superviseProcess } from "../src/supervisor.js";
 
 test("expired heartbeat terminates work before its delayed write", async () => {
-  const temporary = mkdtempSync(join(tmpdir(), "treesync-supervisor-"));
+  const temporary = mkdtempSync(join(tmpdir(), "codefoldersync-supervisor-"));
   try {
     const heartbeat = join(temporary, "heartbeat.json");
     const output = join(temporary, "must-not-exist.txt");

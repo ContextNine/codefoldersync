@@ -223,7 +223,7 @@ function runConflict(run: FakeRun, runId: string, mode: ScenarioMode): void {
     stagePath(context(run, runId, peer, "coral"), {
       operationId: `conflict-${peer}-index`,
       relativePath: "staged.txt",
-      indexBackupRef: `refs/treesync-harness/index/${peer}`,
+      indexBackupRef: `refs/codefoldersync/index/${peer}`,
     });
     writeCanary(context(run, runId, peer, "coral"), {
       operationId: `conflict-${peer}-untracked`,
@@ -277,7 +277,7 @@ function runConflict(run: FakeRun, runId: string, mode: ScenarioMode): void {
     git(join(canonical, "coral"), [
       "fetch",
       sourceRepository,
-      `refs/treesync-harness/index/${source}:refs/treesync-harness/index/${source}`,
+      `refs/codefoldersync/index/${source}:refs/codefoldersync/index/${source}`,
     ]);
     copyFileWithin(
       run.peers[source].workspace,

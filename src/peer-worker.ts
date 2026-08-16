@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   mkdirSync,
+  openSync,
+  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createFixture } from "./fixture.js";
 import { digestGitSnapshots, git, snapshotGit } from "./git.js";
@@ -80,9 +84,123 @@ async function main(): Promise<void> {
     case "supervise-expiry-probe":
       await superviseExpiryProbe(args);
       break;
+    case "codefoldersync-service":
+      codefoldersyncService(args);
+      break;
     default:
       throw new Error(`Unknown peer-worker command: ${command ?? ""}`);
   }
+}
+
+function codefoldersyncService(args: readonly string[]): void {
+  const paths = pathsFrom(args);
+  const action = requiredOption(args, "--action");
+  const binary = requiredOption(args, "--binary");
+  const home = requiredOption(args, "--home");
+  if (!isAbsolute(binary) || !isAbsolute(home))
+    throw new Error("Service binary and home must be absolute");
+  const pidPath = join(paths.control, "codefoldersync-daemon.pid");
+  const logPath = join(paths.control, "codefoldersync-daemon.log");
+  const current = readDaemonPid(pidPath);
+  const running =
+    current !== undefined && daemonMatches(current, binary, false);
+
+  if (action === "status") {
+    output({ running, pid: running ? current : undefined });
+    return;
+  }
+  if (action === "start") {
+    if (running) {
+      output({ running: true, pid: current });
+      return;
+    }
+    if (current !== undefined)
+      throw new Error("Stale or mismatched daemon PID; refusing to replace it");
+    mkdirSync(home, { recursive: true, mode: 0o700 });
+    const log = openSync(logPath, "a", 0o600);
+    const child = spawn(binary, ["daemon", "--no-color"], {
+      detached: true,
+      stdio: ["ignore", log, log],
+      env: { ...process.env, HOME: home },
+    });
+    closeSync(log);
+    if (child.pid === undefined) throw new Error("Daemon did not return a PID");
+    child.unref();
+    writeFileSync(pidPath, `${child.pid}\n`, { mode: 0o600 });
+    waitMilliseconds(500);
+    if (!daemonMatches(child.pid, binary, false))
+      throw new Error("Daemon exited during startup");
+    output({ running: true, pid: child.pid });
+    return;
+  }
+  if (action === "stop") {
+    if (current === undefined) {
+      output({ running: false });
+      return;
+    }
+    if (!daemonMatches(current, binary, true))
+      throw new Error(
+        "PID does not identify the expected daemon; refusing kill",
+      );
+    process.kill(current, "SIGTERM");
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (!processExists(current)) break;
+      waitMilliseconds(100);
+    }
+    if (processExists(current))
+      throw new Error("Daemon did not stop after SIGTERM");
+    rmSync(pidPath, { force: true });
+    output({ running: false });
+    return;
+  }
+  throw new Error(`Invalid service action: ${action}`);
+}
+
+function readDaemonPid(path: string): number | undefined {
+  try {
+    const value = Number(readFileSync(path, "utf8").trim());
+    if (!Number.isSafeInteger(value) || value <= 1)
+      throw new Error("Invalid daemon PID file");
+    return value;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT")
+      return undefined;
+    throw error;
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ESRCH"
+    );
+  }
+}
+
+function daemonMatches(
+  pid: number,
+  binary: string,
+  requireMatch: boolean,
+): boolean {
+  if (!processExists(pid)) return false;
+  const command = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+  });
+  const matches =
+    command.status === 0 &&
+    command.stdout.includes(binary) &&
+    /(?:^|\s)daemon(?:\s|$)/.test(command.stdout);
+  if (requireMatch && !matches) return false;
+  return matches;
+}
+
+function waitMilliseconds(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
 function fixture(args: readonly string[]): void {
@@ -224,7 +342,7 @@ function churn(args: readonly string[]): void {
   });
   const operationId = `churn-${context.peer}-commit`;
   const guarded = args.includes("--guarded");
-  const backupRef = `refs/treesync-harness/${context.peer}/${operationId}`;
+  const backupRef = `refs/codefoldersync/${context.peer}/${operationId}`;
   results.push({
     operationId,
     type: "commit",
