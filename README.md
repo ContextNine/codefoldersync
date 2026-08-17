@@ -168,3 +168,19 @@ pnpm check
 ```
 
 Fleet and scale evidence is committed under `results/`, including the 100k-file, sub-two-second latency, deterministic three-way conflict, and 10,000-operation V2 run. Tests use generated, sentinel-protected roots outside every machine's `~/Code`.
+
+## Local website and documentation
+
+The CTX9-style product site lives in `site/` and is intentionally local-only.
+It includes the landing page and user guides for installation, setup, sync
+behavior, conflicts, recovery, operations, safety, backups, the CLI, and
+troubleshooting.
+
+```bash
+cd site
+npm install
+npm run dev -- --hostname 127.0.0.1
+```
+
+Verify it with `npm run lint` and `npm test`. Do not publish or deploy the site
+without an explicit hosting decision.
