@@ -31,7 +31,7 @@ test("server-renders the landing page and social metadata", async () => {
   assert.match(html, /<title>Code Folder Sync<\/title>/i);
   assert.match(html, /<main>/i);
   assert.match(html, /aria-label="Product capabilities"/i);
-  assert.match(html, /http:\/\/localhost:3000\/og\.png/i);
+  assert.match(html, /https:\/\/codefoldersync\.ctx9\.com\/og\.png/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 

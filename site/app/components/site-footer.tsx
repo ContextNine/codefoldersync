@@ -1,15 +1,16 @@
 import Link from "next/link";
+import { ContextNineWordmark } from "./context-nine-wordmark";
 
 export function SiteFooter() {
   return (
     <footer className="site-footer">
       <div>
         <Link className="brand" href="/">
-          <span>CTX9</span>
-          <span className="brand-product">Code Folder Sync</span>
+          <ContextNineWordmark />
+          <span className="brand-product">/ Code Folder Sync</span>
         </Link>
         <p>
-          Self-hosted synchronization for trusted machines and complete Git
+          Open-source synchronization for trusted machines and complete Git
           worktrees.
         </p>
       </div>

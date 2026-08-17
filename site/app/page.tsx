@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CodeBlock } from "./components/code-block";
+import { InstallCommand } from "./components/install-command";
+import { Reveal } from "./components/reveal";
 import { SiteFooter } from "./components/site-footer";
 import { SiteHeader } from "./components/site-header";
 
@@ -13,7 +15,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Code Folder Sync",
     description,
-    images: [{ url: "/og.png", width: 1730, height: 909 }],
+    images: [{ url: "/og.png", width: 1731, height: 909 }],
     type: "website",
   },
   twitter: {
@@ -114,27 +116,31 @@ export default function Home() {
     <>
       <SiteHeader />
       <main>
+        <a
+          className="release-banner"
+          href="https://github.com/MDerman/codefoldersync"
+        >
+          <span>Open source</span>
+          <strong>
+            Complete worktrees synchronized through infrastructure you control
+          </strong>
+          <i aria-hidden="true">↗</i>
+        </a>
         <section className="hero">
-          <div className="hero-copy">
+          <Reveal className="hero-copy">
             <h1>Your code folder, current on every machine.</h1>
             <p>
               Synchronize complete Git worktrees through a hub you control. No
               account, hosted control plane, or silent conflict overwrite.
             </p>
-            <div className="hero-actions">
-              <Link className="primary-action" href="/docs/getting-started">
-                Get started
-              </Link>
-              <Link href="/docs/how-it-works">Read how it works</Link>
-            </div>
-            <ul className="hero-notes" aria-label="Product properties">
-              <li>Local or SSH hub</li>
-              <li>macOS and Linux</li>
-              <li>No login</li>
-            </ul>
-          </div>
-
-          <div className="sync-view" aria-label="Local hub and peer overview">
+            <InstallCommand />
+          </Reveal>
+        </section>
+        <section
+          className="media-section"
+          aria-label="Local hub and peer overview"
+        >
+          <Reveal className="sync-view">
             <div className="sync-view-header">
               <span>Folder</span>
               <code>~/Code</code>
@@ -171,7 +177,7 @@ export default function Home() {
               <span>3 chunks transferred</span>
               <span>967 ms</span>
             </div>
-          </div>
+          </Reveal>
         </section>
 
         <section
@@ -179,78 +185,94 @@ export default function Home() {
           aria-label="Verified fleet evidence"
         >
           {evidence.map(([value, label]) => (
-            <div key={label}>
+            <Reveal key={label}>
               <strong>{value}</strong>
               <span>{label}</span>
-            </div>
+            </Reveal>
           ))}
         </section>
 
         <section className="section-shell split-heading" id="why">
-          <h2>
-            Git carries history. Code Folder Sync carries work in progress.
-          </h2>
-          <div>
+          <Reveal className="split-heading-inner">
+            <h2>
+              Git carries history. Code Folder Sync carries work in progress.
+            </h2>
+            <div>
+              <p>
+                Commits are excellent durable checkpoints. They are awkward as a
+                handoff for half-finished code, an unstaged refactor, a changed
+                index, or the exact context an agent needs right now.
+              </p>
+              <p>
+                Code Folder Sync keeps that live state aligned across a trusted
+                fleet while Git continues doing the job it was built for.
+              </p>
+            </div>
+          </Reveal>
+        </section>
+
+        <section className="feature-section" aria-label="Product capabilities">
+          <Reveal className="section-heading">
+            <h2>Complete working state, moved deliberately.</h2>
             <p>
-              Commits are excellent durable checkpoints. They are awkward as a
-              handoff for half-finished code, an unstaged refactor, a changed
-              index, or the exact context an agent needs right now.
+              Six narrow guarantees make the whole folder dependable across a
+              trusted fleet.
             </p>
-            <p>
-              Code Folder Sync keeps that live state aligned across a trusted
-              fleet while Git continues doing the job it was built for.
-            </p>
+          </Reveal>
+          <div className="feature-grid">
+            {features.map((feature, index) => (
+              <Reveal
+                className="feature"
+                delay={(index % 3) * 0.06}
+                key={feature.title}
+              >
+                <span className="row-number">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <h3>{feature.title}</h3>
+                <p>{feature.description}</p>
+              </Reveal>
+            ))}
           </div>
         </section>
 
-        <section className="feature-list" aria-label="Product capabilities">
-          {features.map((feature, index) => (
-            <article className="feature-row" key={feature.title}>
-              <span className="row-number">
-                {String(index + 1).padStart(2, "0")}
-              </span>
-              <h3>{feature.title}</h3>
-              <p>{feature.description}</p>
-              <span className="row-detail">{feature.detail}</span>
-            </article>
-          ))}
-        </section>
-
         <section className="section-shell setup-section" id="how-it-works">
-          <div className="section-intro">
+          <Reveal className="section-intro">
             <h2>Build once. Create a hub. Join every other machine.</h2>
             <p>
               Install the same version on peers and the hub host, then let the
               setup wizard validate filesystem behavior before it writes any
               configuration.
             </p>
-          </div>
-          <CodeBlock label="Build and install">{installCommand}</CodeBlock>
+          </Reveal>
+          <Reveal>
+            <CodeBlock label="Build and install">{installCommand}</CodeBlock>
+          </Reveal>
           <div className="steps">
-            <article>
+            <Reveal>
               <span>01</span>
               <h3>Create the folder</h3>
               <p>
                 Point setup at the parent containing your direct-child Git
                 repositories and choose a local path or SSH hub.
               </p>
-            </article>
-            <article>
+            </Reveal>
+            <Reveal delay={0.06}>
               <span>02</span>
               <h3>Join an empty peer</h3>
               <p>
                 Use the folder ID on another machine. An empty destination
                 receives the exact accepted worktree and Git state.
               </p>
-            </article>
-            <article>
+            </Reveal>
+            <Reveal delay={0.12}>
               <span>03</span>
               <h3>Keep the daemon running</h3>
               <p>
                 A per-folder user service watches stable saves, publishes
                 deltas, and reconciles metadata periodically.
               </p>
-            </article>
+            </Reveal>
           </div>
           <Link className="text-action" href="/docs/getting-started">
             Follow the setup guide <span aria-hidden="true">→</span>
@@ -258,15 +280,15 @@ export default function Home() {
         </section>
 
         <section className="section-shell workflow-section">
-          <div className="section-intro">
+          <Reveal className="section-intro">
             <h2>One current tree for humans, remotes, and coding agents.</h2>
             <p>
               Move between machines without converting every context switch into
               a temporary commit or a hand-written file transfer.
             </p>
-          </div>
+          </Reveal>
           <div className="workflow-grid">
-            <article>
+            <Reveal>
               <h3>Laptop to build machine</h3>
               <p>
                 Continue an uncommitted change on a faster remote host with the
@@ -277,8 +299,8 @@ export default function Home() {
                 <li>Chunk reuse after first join</li>
                 <li>Durable offline queue</li>
               </ul>
-            </article>
-            <article>
+            </Reveal>
+            <Reveal delay={0.06}>
               <h3>Human to coding agent</h3>
               <p>
                 Give an agent host the exact workspace you see, then receive its
@@ -289,8 +311,8 @@ export default function Home() {
                 <li>Normal files stay normal files</li>
                 <li>Competing edits remain visible</li>
               </ul>
-            </article>
-            <article>
+            </Reveal>
+            <Reveal delay={0.12}>
               <h3>Machine replacement</h3>
               <p>
                 Join a fresh empty destination from retained hub state instead
@@ -301,20 +323,20 @@ export default function Home() {
                 <li>Transactional Git validation</li>
                 <li>Full verification command</li>
               </ul>
-            </article>
+            </Reveal>
           </div>
         </section>
 
         <section className="section-shell trust-section">
-          <div className="section-intro">
+          <Reveal className="section-intro">
             <h2>The safety boundary is explicit.</h2>
             <p>
               This is infrastructure for a small trusted fleet. It fails closed
               when it cannot prove that a path, object, Git state, or causal
               transition is safe.
             </p>
-          </div>
-          <div className="trust-table">
+          </Reveal>
+          <Reveal className="trust-table">
             <div>
               <span>Transport</span>
               <strong>Authenticated and encrypted by SSH</strong>
@@ -339,16 +361,16 @@ export default function Home() {
               <span>Writer ownership</span>
               <strong>One mutating process per configured folder</strong>
             </div>
-          </div>
+          </Reveal>
           <Link className="text-action" href="/docs/safety-and-backups">
             Read the safety and backup guide <span aria-hidden="true">→</span>
           </Link>
         </section>
 
         <section className="section-shell faq-section">
-          <div className="section-intro">
+          <Reveal className="section-intro">
             <h2>Questions, answered directly.</h2>
-          </div>
+          </Reveal>
           <div className="faq-list">
             {faqs.map((faq) => (
               <details key={faq.question}>
@@ -360,17 +382,19 @@ export default function Home() {
         </section>
 
         <section className="final-cta">
-          <h2>Put every trusted machine on the same working tree.</h2>
-          <p>
-            Start with a local hub, understand the safety boundary, then join
-            the machines where you actually work.
-          </p>
-          <div className="hero-actions">
-            <Link className="primary-action" href="/docs/installation">
-              Install Code Folder Sync
-            </Link>
-            <Link href="/docs">Browse documentation</Link>
-          </div>
+          <Reveal>
+            <h2>Put every trusted machine on the same working tree.</h2>
+            <p>
+              Start with a local hub, understand the safety boundary, then join
+              the machines where you actually work.
+            </p>
+            <div className="hero-actions">
+              <Link className="primary-action" href="/docs/installation">
+                Install Code Folder Sync
+              </Link>
+              <Link href="/docs">Browse documentation</Link>
+            </div>
+          </Reveal>
         </section>
       </main>
       <SiteFooter />
