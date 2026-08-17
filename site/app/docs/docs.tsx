@@ -1,6 +1,6 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { CodeBlock } from "../components/code-block";
+import { SiteLink } from "../components/site-link";
 
 export interface DocSection {
   id: string;
@@ -133,9 +133,9 @@ node dist/product-cli.js install
           The wizard creates or joins a folder, probes the filesystem, performs
           the initial synchronization, and can install the per-folder user
           service. Start with{" "}
-          <Link href="/docs/installation">Installation</Link> for requirements
-          or go directly to{" "}
-          <Link href="/docs/getting-started">Getting started</Link>.
+          <SiteLink href="/docs/installation">Installation</SiteLink> for
+          requirements or go directly to{" "}
+          <SiteLink href="/docs/getting-started">Getting started</SiteLink>.
         </p>
 
         <h2 id="guides">Guides</h2>
@@ -144,10 +144,10 @@ node dist/product-cli.js install
             .flatMap((group) => group.items)
             .slice(1)
             .map((item) => (
-              <Link href={item.href} key={item.href}>
+              <SiteLink href={item.href} key={item.href}>
                 <span>{item.label}</span>
                 <span aria-hidden="true">→</span>
-              </Link>
+              </SiteLink>
             ))}
         </div>
 
@@ -919,9 +919,9 @@ codefoldersync history
 find /path/to/code -name '*CODEFOLDERSYNC-CONFLICT*'`}</CodeBlock>
         <p>
           Follow{" "}
-          <Link href="/docs/conflicts-and-recovery">
+          <SiteLink href="/docs/conflicts-and-recovery">
             Conflicts and recovery
-          </Link>
+          </SiteLink>
           before choosing or combining versions.
         </p>
 

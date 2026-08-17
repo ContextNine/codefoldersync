@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { CodeBlock } from "./components/code-block";
 import { InstallCommand } from "./components/install-command";
 import { Reveal } from "./components/reveal";
 import { SiteFooter } from "./components/site-footer";
 import { SiteHeader } from "./components/site-header";
+import { SiteLink } from "./components/site-link";
 
 const description =
   "Keep the folder containing your Git repositories synchronized across machines you control.";
@@ -274,9 +274,9 @@ export default function Home() {
               </p>
             </Reveal>
           </div>
-          <Link className="text-action" href="/docs/getting-started">
+          <SiteLink className="text-action" href="/docs/getting-started">
             Follow the setup guide <span aria-hidden="true">→</span>
-          </Link>
+          </SiteLink>
         </section>
 
         <section className="section-shell workflow-section">
@@ -362,9 +362,9 @@ export default function Home() {
               <strong>One mutating process per configured folder</strong>
             </div>
           </Reveal>
-          <Link className="text-action" href="/docs/safety-and-backups">
+          <SiteLink className="text-action" href="/docs/safety-and-backups">
             Read the safety and backup guide <span aria-hidden="true">→</span>
-          </Link>
+          </SiteLink>
         </section>
 
         <section className="section-shell faq-section">
@@ -389,10 +389,10 @@ export default function Home() {
               the machines where you actually work.
             </p>
             <div className="hero-actions">
-              <Link className="primary-action" href="/docs/installation">
+              <SiteLink className="primary-action" href="/docs/installation">
                 Install Code Folder Sync
-              </Link>
-              <Link href="/docs">Browse documentation</Link>
+              </SiteLink>
+              <SiteLink href="/docs">Browse documentation</SiteLink>
             </div>
           </Reveal>
         </section>

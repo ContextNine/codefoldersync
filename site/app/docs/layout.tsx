@@ -1,7 +1,7 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { SiteFooter } from "../components/site-footer";
 import { SiteHeader } from "../components/site-header";
+import { SiteLink } from "../components/site-link";
 import { docsNavigation } from "./docs";
 
 function DocsNavigation() {
@@ -11,9 +11,9 @@ function DocsNavigation() {
         <div key={group.label}>
           <span>{group.label}</span>
           {group.items.map((item) => (
-            <Link href={item.href} key={item.href}>
+            <SiteLink href={item.href} key={item.href}>
               {item.label}
-            </Link>
+            </SiteLink>
           ))}
         </div>
       ))}
