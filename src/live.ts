@@ -22,6 +22,7 @@ import { LeaseGuard } from "./guard.js";
 import { DurableJournal, readJournal } from "./journal.js";
 import { resolveRunPaths, validateRunRoot } from "./paths.js";
 import { runCommand } from "./process.js";
+import { productVersion } from "./v2/service.js";
 import {
   peerNames,
   repositoryNames,
@@ -84,7 +85,7 @@ export function prepareLive(
     deployWorker(peer, runId, dist);
     capabilities[peer.name] = runWorkerJson(peer, runId, "capabilities", []);
     const version = runProduct(peer, runId, ["--version"]);
-    if (!/^codefoldersync 0\.2\.0\s*$/u.test(version.stdout)) {
+    if (version.stdout.trim() !== `codefoldersync ${productVersion}`) {
       throw new Error(
         `Unexpected product build on ${peer.name}: ${version.stdout.trim()}`,
       );

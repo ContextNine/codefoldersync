@@ -13,7 +13,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { ProductConfig, ServiceStatus } from "./types.js";
 
-export const productVersion = "0.2.0";
+export const productVersion = "0.2.1";
 
 export interface ServiceOptions {
   readonly configPath: string;

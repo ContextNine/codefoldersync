@@ -1,11 +1,16 @@
 {
   "name": "codefoldersync",
-  "version": "0.2.0",
-  "private": true,
+  "version": "0.2.1",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "codefoldersync": "dist/product-cli.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "packageManager": "pnpm@10.15.0",
   "engines": {
     "node": ">=22"
@@ -18,7 +23,7 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/**/*.test.ts",
-    "check": "pnpm format:check && pnpm typecheck && pnpm test"
+    "check": "pnpm format:check && pnpm typecheck && pnpm build && pnpm test"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

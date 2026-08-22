@@ -280,7 +280,7 @@ test("V2 setup and service installation stay inside explicit paths", async () =>
     assert.equal(existsSync(installation.executable), true);
     assert.equal(
       activateInstalledVersion({
-        version: "0.2.0",
+        version: "0.2.1",
         installRoot: join(base, "installed"),
         binaryDirectory: join(base, "bin"),
       }).executable,

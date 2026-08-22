@@ -31,7 +31,16 @@ The hub contains plaintext repository data and inherits the hub machine's filesy
 
 ## Install
 
-CodeFolderSync currently requires Node.js 22 or newer. Build and install a versioned copy:
+CodeFolderSync requires Node.js 22 or newer. Download the release archive and checksum from [GitHub Releases](https://github.com/MDerman/codefoldersync/releases), verify them, extract the archive, then run:
+
+```bash
+python3 codefoldersync-0.2.1/scripts/install.py
+codefoldersync --version
+```
+
+The release installer is idempotent and supports `--verify --json`. It installs a versioned build under `~/.local/lib/codefoldersync` and activates `~/.local/bin/codefoldersync` without requiring a repository checkout.
+
+For development, build and install the current checkout:
 
 ```bash
 corepack pnpm install
@@ -40,7 +49,7 @@ node dist/product-cli.js install
 ~/.local/bin/codefoldersync --version
 ```
 
-The installer copies the build to `~/.local/lib/codefoldersync/0.2.0/` and atomically activates `~/.local/bin/codefoldersync`. The wrapper records the absolute Node executable used during installation, so launchd/systemd and noninteractive shells do not depend on nvm or shell startup files.
+The installer copies the build to `~/.local/lib/codefoldersync/0.2.1/` and atomically activates `~/.local/bin/codefoldersync`. The wrapper records the absolute Node executable used during installation, so launchd/systemd and noninteractive shells do not depend on nvm or shell startup files.
 
 Install the same build on the hub machine before configuring an SSH hub. `upgrade` installs another versioned build, and `rollback --version <version>` only changes the active wrapper.
 

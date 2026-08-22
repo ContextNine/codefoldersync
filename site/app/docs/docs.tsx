@@ -218,7 +218,7 @@ node dist/product-cli.js install
           place.
         </p>
         <CodeBlock>{`codefoldersync upgrade
-codefoldersync rollback --version 0.2.0`}</CodeBlock>
+codefoldersync rollback --version 0.2.1`}</CodeBlock>
 
         <h2 id="services">Service support</h2>
         <p>
