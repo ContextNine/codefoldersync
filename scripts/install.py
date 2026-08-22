@@ -10,7 +10,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 
 def release_root() -> Path:

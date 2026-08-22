@@ -7,7 +7,7 @@ import { SiteHeader } from "./components/site-header";
 import { SiteLink } from "./components/site-link";
 
 const description =
-  "Keep the folder containing your Git repositories synchronized across machines you control.";
+  "Keep an entire code folder synchronized across machines you control, including nested Git worktrees and in-progress state.";
 
 export const metadata: Metadata = {
   title: { absolute: "Code Folder Sync" },
@@ -33,9 +33,9 @@ node dist/product-cli.js install
 ~/.local/bin/codefoldersync --version`;
 
 const evidence = [
-  ["100,000", "files joined exactly"],
-  ["1.31 s", "observed p95 visibility"],
-  ["10,000", "churn operations verified"],
+  ["3", "populated peers adopted"],
+  ["30", "local acceptance checks"],
+  ["0", "source mutations during adoption"],
   ["0", "silent conflict overwrites"],
 ] as const;
 
@@ -102,7 +102,7 @@ const faqs = [
   {
     question: "Can I sync any arbitrary folder?",
     answer:
-      "Version 2 intentionally supports one parent folder containing explicitly enrolled direct-child Git repositories with in-tree .git directories. That narrow boundary makes membership, Git handling, path safety, and recovery provable.",
+      "Version 3 recursively discovers ordinary files, directories, symlinks, and nested Git boundaries below one configured root. Reserved state, ignored paths, mounts, special files, unsafe aliases, and external Git directories remain outside the synchronization boundary.",
   },
   {
     question: "Which systems are supported?",
@@ -173,7 +173,7 @@ export default function Home() {
               <code>seq 1842</code>
             </div>
             <div className="event-row">
-              <code>src/v2/engine.ts</code>
+              <code>src/v3/engine.ts</code>
               <span>3 chunks transferred</span>
               <span>967 ms</span>
             </div>
@@ -238,11 +238,11 @@ export default function Home() {
 
         <section className="section-shell setup-section" id="how-it-works">
           <Reveal className="section-intro">
-            <h2>Build once. Create a hub. Join every other machine.</h2>
+            <h2>Seal one source. Adopt every populated machine.</h2>
             <p>
               Install the same version on peers and the hub host, then let the
-              setup wizard validate filesystem behavior before it writes any
-              configuration.
+              setup flow validate roots, signatures, recovery capacity, and
+              filesystem behavior before any target is changed.
             </p>
           </Reveal>
           <Reveal>
@@ -251,26 +251,27 @@ export default function Home() {
           <div className="steps">
             <Reveal>
               <span>01</span>
-              <h3>Create the folder</h3>
+              <h3>Create the authority</h3>
               <p>
-                Point setup at the parent containing your direct-child Git
-                repositories and choose a local path or SSH hub.
+                Point setup at the complete source root, choose a local or SSH
+                hub, and bind the required backup witness.
               </p>
             </Reveal>
             <Reveal delay={0.06}>
               <span>02</span>
-              <h3>Join an empty peer</h3>
+              <h3>Enroll and plan</h3>
               <p>
-                Use the folder ID on another machine. An empty destination
-                receives the exact accepted worktree and Git state.
+                Each target generates its own signed request. The authority
+                enrolls it, then adoption classifies its populated tree without
+                changing the source.
               </p>
             </Reveal>
             <Reveal delay={0.12}>
               <span>03</span>
-              <h3>Keep the daemon running</h3>
+              <h3>Verify, then cut over</h3>
               <p>
-                A per-folder user service watches stable saves, publishes
-                deltas, and reconciles metadata periodically.
+                Apply recoverably, force-verify every target, and approve one
+                signed barrier before enabling multi-writer services.
               </p>
             </Reveal>
           </div>
@@ -296,7 +297,7 @@ export default function Home() {
               </p>
               <ul>
                 <li>Direct SSH transport</li>
-                <li>Chunk reuse after first join</li>
+                <li>Chunk reuse after initial adoption</li>
                 <li>Durable offline queue</li>
               </ul>
             </Reveal>
@@ -315,8 +316,9 @@ export default function Home() {
             <Reveal delay={0.12}>
               <h3>Machine replacement</h3>
               <p>
-                Join a fresh empty destination from retained hub state instead
-                of reconstructing each repository and uncommitted change.
+                Enroll a replacement destination and adopt it from retained hub
+                state instead of reconstructing every repository and uncommitted
+                change.
               </p>
               <ul>
                 <li>Exact symlink target text</li>
@@ -385,7 +387,7 @@ export default function Home() {
           <Reveal>
             <h2>Put every trusted machine on the same working tree.</h2>
             <p>
-              Start with a local hub, understand the safety boundary, then join
+              Start with a local hub, understand the safety boundary, then adopt
               the machines where you actually work.
             </p>
             <div className="hero-actions">

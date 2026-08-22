@@ -110,11 +110,10 @@ export const docs: readonly DocPage[] = [
     body: (
       <>
         <p>
-          Code Folder Sync keeps one parent folder of explicitly enrolled Git
-          repositories synchronized across your machines. It carries ordinary
-          worktree files incrementally and treats each repository&apos;s{" "}
-          <code>.git</code>
-          directory as one validated, recoverable transaction.
+          Code Folder Sync recursively keeps one complete code root synchronized
+          across your machines. It discovers ordinary files, directories,
+          symlinks, and nested Git boundaries automatically, while treating each
+          Git state as one validated, recoverable transaction.
         </p>
         <Callout title="No hosted service">
           <p>
@@ -130,11 +129,11 @@ pnpm build
 node dist/product-cli.js install
 ~/.local/bin/codefoldersync setup`}</CodeBlock>
         <p>
-          The wizard creates or joins a folder, probes the filesystem, performs
-          the initial synchronization, and can install the per-folder user
-          service. Start with{" "}
-          <SiteLink href="/docs/installation">Installation</SiteLink> for
-          requirements or go directly to{" "}
+          The setup flow creates one configuration authority, enrolls signed
+          peer requests, and guides source-authoritative adoption. Services stay
+          disabled until all targets verify and the authority approves cutover.
+          Start with <SiteLink href="/docs/installation">Installation</SiteLink>{" "}
+          for requirements or go directly to{" "}
           <SiteLink href="/docs/getting-started">Getting started</SiteLink>.
         </p>
 
@@ -153,10 +152,11 @@ node dist/product-cli.js install
 
         <h2 id="scope">Supported scope</h2>
         <p>
-          Version 2 synchronizes direct-child repositories inside one parent
-          folder. Each repository needs an in-tree <code>.git</code> directory.
-          Nested repositories, submodules with separate Git directories, linked
-          worktrees, sockets, devices, and FIFOs are outside the current model.
+          Version 3 synchronizes the recursively included namespace below one
+          root. Nested physical Git repositories and contained Git indirection
+          are supported. Reserved state, ignored paths, mount crossings,
+          sockets, devices, FIFOs, unsafe aliases, and Git directories outside
+          the root are rejected.
         </p>
       </>
     ),
@@ -186,10 +186,7 @@ node dist/product-cli.js install
           <li>Node.js 22 or newer.</li>
           <li>Git.</li>
           <li>SSH key access when the hub is on another machine.</li>
-          <li>
-            Direct-child repositories with in-tree <code>.git</code>{" "}
-            directories.
-          </li>
+          <li>A backup witness before source sealing or target mutation.</li>
         </ul>
         <p>
           No root access, account, signup, token, or browser callback is
@@ -218,14 +215,13 @@ node dist/product-cli.js install
           place.
         </p>
         <CodeBlock>{`codefoldersync upgrade
-codefoldersync rollback --version 0.2.1`}</CodeBlock>
+codefoldersync rollback --version 0.3.0`}</CodeBlock>
 
         <h2 id="services">Service support</h2>
         <p>
-          Setup can create one user service per folder: a launchd label on macOS
-          or a systemd user unit on Linux. Definitions use absolute executable,
-          configuration, working-directory, and log paths, so they do not depend
-          on an interactive shell.
+          After signed cutover, setup can create one user service per folder: a
+          launchd label on macOS or a systemd user unit on Linux. Installation,
+          start, and restart fail closed while the folder remains in adoption.
         </p>
         <CommandRows
           rows={[
@@ -251,30 +247,30 @@ codefoldersync rollback --version 0.2.1`}</CodeBlock>
     slug: "getting-started",
     title: "Getting started",
     description:
-      "Create the first folder and hub, then join an empty destination on another machine.",
+      "Create the authority, enroll populated peers, and adopt them without mutating the source.",
     sections: [
       { id: "before-you-start", label: "Before you start" },
-      { id: "create", label: "Create the folder" },
-      { id: "join", label: "Join another machine" },
-      { id: "verify", label: "Verify and start" },
+      { id: "create", label: "Create the authority" },
+      { id: "join", label: "Enroll another machine" },
+      { id: "verify", label: "Adopt and cut over" },
     ],
     body: (
       <>
         <p>
-          The interactive wizard is the shortest path. It validates the same
-          constraints as automation flags and can install the background service
-          when the initial synchronization succeeds.
+          The interactive authority wizard is the shortest path for the source.
+          Target key generation, enrollment approval, adoption, verification,
+          and cutover remain explicit so no populated tree is silently chosen as
+          the winner.
         </p>
 
         <h2 id="before-you-start">Before you start</h2>
         <ul>
-          <li>
-            Choose one parent folder whose direct children are Git repositories.
-          </li>
+          <li>Choose the complete source code root.</li>
           <li>
             Choose a local hub path or an SSH hub path on a trusted machine.
           </li>
           <li>Keep hub and peer state outside the synchronized root.</li>
+          <li>Create and verify a recoverable backup witness.</li>
           <li>
             Install the same Code Folder Sync version on every participating
             machine.
@@ -287,44 +283,55 @@ codefoldersync rollback --version 0.2.1`}</CodeBlock>
           </p>
         </Callout>
 
-        <h2 id="create">Create the folder</h2>
-        <CodeBlock>{`codefoldersync setup`}</CodeBlock>
-        <p>
-          Choose <strong>create</strong>, provide the root and hub, give the
-          folder and peer readable names, and allow the filesystem probes to
-          complete. The result prints a folder ID.
-        </p>
-        <p>Automation can use the same validation path:</p>
-        <CodeBlock>{`codefoldersync setup \\
-  --mode create \\
+        <h2 id="create">Create the authority</h2>
+        <CodeBlock>{`codefoldersync setup --mode authority \\
   --root /absolute/path/to/code \\
   --hub ssh://user@hub-host/absolute/path/to/hub \\
-  --name my-code \\
-  --peer laptop`}</CodeBlock>
-
-        <h2 id="join">Join another machine</h2>
+  --backup-witness <verified-witness-id>`}</CodeBlock>
         <p>
-          The destination must be empty. This makes an initial join
-          distinguishable from an untracked local tree and gives interrupted
-          materialization a safe recovery boundary.
+          The authority owns configuration revisions and the final cutover
+          approval. Seal its recursive source snapshot before preparing any
+          target.
+        </p>
+        <CodeBlock>{`codefoldersync adoption seal`}</CodeBlock>
+
+        <h2 id="join">Enroll another machine</h2>
+        <p>
+          A populated target creates its own key and signed enrollment request.
+          The authority approves that request, and the target activates only the
+          accepted signed projection. Private peer keys never move between
+          machines.
         </p>
         <CodeBlock>{`codefoldersync setup \\
-  --mode join \\
-  --folder-id <folder-id> \\
-  --root /absolute/path/to/empty/code \\
-  --hub ssh://user@hub-host/absolute/path/to/hub \\
-  --peer desktop`}</CodeBlock>
+  --mode request \\
+  --accepted-config /path/to/accepted-config.json \\
+  --root /absolute/path/to/code \\
+  --state /absolute/path/to/state \\
+  --request /path/to/request.json
 
-        <h2 id="verify">Verify and start</h2>
-        <CodeBlock>{`codefoldersync doctor
-codefoldersync status
-codefoldersync verify --full
+codefoldersync setup --mode enroll \\
+  --config /path/to/authority-config.json \\
+  --request /path/to/request.json
+
+codefoldersync setup --mode activate \\
+  --accepted-config /path/to/accepted-config.json \\
+  --state /absolute/path/to/state \\
+  --request /path/to/request.json`}</CodeBlock>
+
+        <h2 id="verify">Adopt and cut over</h2>
+        <CodeBlock>{`codefoldersync adoption plan
+codefoldersync adoption apply --adoption-id <id>
+codefoldersync adoption verify
+
+# On the authority, only after every target verifies:
+codefoldersync adoption cutover --approve
 codefoldersync service install
 codefoldersync service start`}</CodeBlock>
         <p>
-          <code>verify --full</code> deliberately rehashes the complete tree. It
-          is the authoritative expensive check after a first join, restore,
-          conflict resolution, or incident.
+          Adoption keeps the sealed source authoritative, writes displaced
+          target content to recovery, and requires a forced content
+          verification. Multi-writer synchronization and services remain blocked
+          until the signed cutover barrier is accepted.
         </p>
       </>
     ),
@@ -335,7 +342,7 @@ codefoldersync service start`}</CodeBlock>
     description:
       "A plain-language path from one saved file to a causally accepted change on every peer.",
     sections: [
-      { id: "one-folder", label: "One folder, explicit repositories" },
+      { id: "one-folder", label: "One recursive folder" },
       { id: "save-path", label: "The saved-file path" },
       { id: "content", label: "Immutable content" },
       { id: "ordering", label: "Causal ordering" },
@@ -350,22 +357,20 @@ codefoldersync service start`}</CodeBlock>
           and a content edit can advance without turning into a path guess.
         </p>
 
-        <h2 id="one-folder">One folder, explicit repositories</h2>
+        <h2 id="one-folder">One recursive folder</h2>
         <p>
-          A folder is one synchronization namespace. Its direct-child
-          repositories and ignore rules are shared metadata. Every peer must
-          agree before sync proceeds, so machines cannot silently scan different
-          trees.
+          A folder is one recursively discovered synchronization namespace.
+          Signed authority configuration fixes the source root, peer roots, hub,
+          lifecycle, and ignore digest. Every peer projects the same accepted
+          contract before sync proceeds.
         </p>
 
         <h2 id="save-path">The saved-file path</h2>
         <ol>
+          <li>A watcher or periodic reconciliation detects a changed path.</li>
           <li>
-            A native watcher reports a path and waits for the stable-save
-            window.
-          </li>
-          <li>
-            The peer uses <code>lstat</code> and captures only that leaf.
+            The peer uses <code>lstat</code> and captures the affected leaf or
+            Git boundary.
           </li>
           <li>
             Immutable objects and one causal event enter the durable outbox.
@@ -405,7 +410,7 @@ codefoldersync service start`}</CodeBlock>
 
         <h2 id="git">The Git plane</h2>
         <p>
-          Ordinary path events exclude <code>.git</code>. Instead, a stable Git
+          Nested Git boundaries are discovered automatically. A stable Git
           directory is captured as a content-addressed tree, checked with
           <code>git fsck --full</code>, transferred incrementally, staged on the
           destination, checked again, and swapped under a recovery journal.
@@ -414,10 +419,10 @@ codefoldersync service start`}</CodeBlock>
         <h2 id="reconciliation">Reconciliation</h2>
         <p>
           Watchers improve latency but are not trusted as an event log. Startup,
-          structural changes, overflow, ambiguity, and the periodic ten-minute
-          deadline trigger a full metadata walk and checkpoint reconciliation.
-          Unchanged file observations reuse accepted manifests; full
-          verification intentionally rehashes content.
+          structural changes, overflow, ambiguity, and the periodic deadline
+          trigger a full metadata walk and checkpoint reconciliation. Unchanged
+          file observations reuse accepted manifests; full verification
+          intentionally rehashes content.
         </p>
       </>
     ),
@@ -471,12 +476,12 @@ rg --files /path/to/code | rg 'CODEFOLDERSYNC-CONFLICT'`}</CodeBlock>
         <p>
           Concurrent valid <code>.git</code> states become explicit conflict
           manifests, not a directory of independently merged refs and indexes.
-          Inspect both histories, then choose deliberately:
+          Inspect retained history and materialize either manifest to an
+          unrelated path before choosing deliberately.
         </p>
         <CodeBlock>{`codefoldersync conflicts
-codefoldersync resolve-git <conflict-id> --take canonical
-# or
-codefoldersync resolve-git <conflict-id> --take conflict`}</CodeBlock>
+codefoldersync history
+codefoldersync recover <conflict-id> --to /absolute/empty/path`}</CodeBlock>
 
         <h2 id="recover">Recover a manifest</h2>
         <p>
@@ -500,12 +505,12 @@ codefoldersync resolve-git <conflict-id> --take conflict`}</CodeBlock>
     slug: "operations",
     title: "Operations",
     description:
-      "Run routine checks, manage the daemon, change repository membership, and respond to incidents.",
+      "Run routine checks, manage the daemon, revise the recursive folder contract, and respond to incidents.",
     sections: [
       { id: "routine", label: "Routine checks" },
       { id: "status", label: "Status meanings" },
       { id: "single-writer", label: "Single writer" },
-      { id: "membership", label: "Membership and ignores" },
+      { id: "membership", label: "Catalog and ignores" },
       { id: "incident", label: "Incident response" },
     ],
     body: (
@@ -583,23 +588,24 @@ codefoldersync resolve-git <conflict-id> --take conflict`}</CodeBlock>
         <p>
           The daemon holds an owner-only lock for its lifetime. Mutating
           foreground commands fail closed while it is active. Stop the service
-          before a manual sync, full verification, membership change, ignore
-          change, or Git conflict resolution, then start it again afterward.
+          before a manual sync, full verification, or approved ignore change,
+          then start it again afterward.
         </p>
         <CodeBlock>{`codefoldersync service stop
 codefoldersync verify --full
 codefoldersync service start`}</CodeBlock>
 
-        <h2 id="membership">Membership and ignores</h2>
-        <CodeBlock>{`codefoldersync repository add new-repo
-codefoldersync repository remove old-repo
-codefoldersync repository refresh
-codefoldersync ignore push
-codefoldersync ignore pull`}</CodeBlock>
+        <h2 id="membership">Catalog and ignores</h2>
+        <CodeBlock>{`codefoldersync catalog status
+codefoldersync config status
+codefoldersync config update-ignore \\
+  --previous-ignore /path/to/previous-ignore \\
+  --approve`}</CodeBlock>
         <p>
-          Removing membership never deletes the repository from disk. An ignore
-          mismatch stops synchronization until an operator explicitly pushes or
-          pulls the folder-level contract.
+          The catalog is derived recursively and has no manual membership list.
+          Only the authority can accept a new ignore revision after previewing
+          the included and excluded entry and byte counts. Peers project the
+          accepted signed revision.
         </p>
 
         <h2 id="incident">Incident response</h2>
@@ -651,13 +657,14 @@ codefoldersync ignore pull`}</CodeBlock>
             SSH authenticates peers and encrypts transport. Objects and metadata
             are plaintext in the hub directory and inherit that host&apos;s
             filesystem permissions, disk encryption, monitoring, and backup
-            policy. Any peer with hub access can submit mutations for the shared
-            folder.
+            policy. The hub verifies enrolled peer signatures and the signed
+            authority configuration before accepting changes.
           </p>
         </Callout>
         <p>
           There is no multi-user authorization layer, hosted API, or
-          peer-to-peer leader election in Version 2.
+          peer-to-peer leader election. The authority is the sole configuration
+          writer; peers are target-local identities.
         </p>
 
         <h2 id="filesystem">Filesystem boundary</h2>
@@ -734,14 +741,14 @@ codefoldersync ignore pull`}</CodeBlock>
       { id: "setup", label: "Setup" },
       { id: "sync", label: "Sync and inspect" },
       { id: "service", label: "Service" },
-      { id: "folder", label: "Folder contract" },
+      { id: "folder", label: "Adoption and contract" },
       { id: "recovery", label: "Conflict and recovery" },
     ],
     body: (
       <>
         <p>
           Commands use the default config at
-          <code>~/.config/codefoldersync/folders/default.json</code> unless
+          <code>~/Code/.codefoldersync/config.json</code> unless
           <code>--config &lt;path&gt;</code> is supplied.
         </p>
 
@@ -763,17 +770,22 @@ codefoldersync ignore pull`}</CodeBlock>
         <h2 id="setup">Setup</h2>
         <CommandRows
           rows={[
+            ["codefoldersync setup", "Run the interactive authority wizard."],
             [
-              "codefoldersync setup",
-              "Run the interactive create or join wizard.",
+              "codefoldersync setup --mode authority ...",
+              "Create the signed authority configuration.",
             ],
             [
-              "codefoldersync setup --mode create ...",
-              "Create a folder through automation flags.",
+              "codefoldersync setup --mode request ...",
+              "Create a target-local key and enrollment request.",
             ],
             [
-              "codefoldersync setup --mode join ...",
-              "Join an empty destination by folder ID.",
+              "codefoldersync setup --mode enroll ...",
+              "Approve a target request on the authority.",
+            ],
+            [
+              "codefoldersync setup --mode activate ...",
+              "Activate an accepted projection on the target.",
             ],
           ]}
         />
@@ -795,10 +807,7 @@ codefoldersync ignore pull`}</CodeBlock>
               "codefoldersync verify --full",
               "Force-hash and verify the complete folder.",
             ],
-            [
-              "codefoldersync history [repository]",
-              "Read causal event and result history.",
-            ],
+            ["codefoldersync history", "Read causal event and result history."],
           ]}
         />
 
@@ -811,28 +820,32 @@ codefoldersync service status
 codefoldersync service logs
 codefoldersync service uninstall`}</CodeBlock>
 
-        <h2 id="folder">Folder contract</h2>
+        <h2 id="folder">Adoption and contract</h2>
         <CommandRows
           rows={[
             [
-              "codefoldersync repository add <name>",
-              "Enroll a direct-child repository.",
+              "codefoldersync adoption seal",
+              "Publish the authority source seal.",
             ],
             [
-              "codefoldersync repository remove <name>",
-              "Remove membership without deleting files.",
+              "codefoldersync adoption plan",
+              "Classify a populated target without mutation.",
             ],
             [
-              "codefoldersync repository refresh",
-              "Refresh the explicit membership contract.",
+              "codefoldersync adoption apply --adoption-id <id>",
+              "Recover target differences and apply the source seal.",
             ],
             [
-              "codefoldersync ignore push",
-              "Publish the local .codefoldersyncignore contract.",
+              "codefoldersync adoption verify",
+              "Force-hash and record a target verification.",
             ],
             [
-              "codefoldersync ignore pull",
-              "Install the hub ignore contract locally.",
+              "codefoldersync adoption cutover --approve",
+              "Publish the signed normal-mode barrier.",
+            ],
+            [
+              "codefoldersync config update-ignore --previous-ignore <path> [--approve]",
+              "Preview or approve an authority ignore revision.",
             ],
           ]}
         />
@@ -842,24 +855,12 @@ codefoldersync service uninstall`}</CodeBlock>
           rows={[
             ["codefoldersync conflicts", "List ordinary and Git conflicts."],
             [
-              "codefoldersync resolve-git <id> --take canonical",
-              "Select the canonical Git state.",
-            ],
-            [
-              "codefoldersync resolve-git <id> --take conflict",
-              "Select the competing Git state.",
-            ],
-            [
               "codefoldersync recover <id> --to <empty-path>",
               "Export retained content without changing the folder.",
             ],
             [
               "codefoldersync gc --dry-run",
               "Report reachability; never delete automatically.",
-            ],
-            [
-              "codefoldersync migrate-v1 --dry-run --root <path>",
-              "Inventory a V1 tree without mutation.",
             ],
           ]}
         />
@@ -877,7 +878,7 @@ codefoldersync service uninstall`}</CodeBlock>
       { id: "inconclusive", label: "Inconclusive" },
       { id: "conflict", label: "Conflict" },
       { id: "writer-lock", label: "Writer lock" },
-      { id: "join", label: "Join issues" },
+      { id: "join", label: "Adoption issues" },
     ],
     body: (
       <>
@@ -933,13 +934,13 @@ find /path/to/code -name '*CODEFOLDERSYNC-CONFLICT*'`}</CodeBlock>
           locks are moved to recovery on safe startup.
         </p>
 
-        <h2 id="join">A join destination is rejected</h2>
+        <h2 id="join">An adoption plan is rejected</h2>
         <p>
-          A new peer must use an empty destination. Existing untracked content
-          has no causal baseline, so Code Folder Sync refuses to guess whether
-          it is an import, a partial join, or competing work. Move that content
-          aside, join cleanly, then reintroduce deliberate changes through
-          normal files.
+          Confirm that the target still matches the digest classified by the
+          plan, its signed config projection is current, state and root share a
+          filesystem, the source seal and backup witness remain accepted, and
+          every displaced object can be written to recovery. Generate a new plan
+          after any target change; never edit the encrypted plan or force apply.
         </p>
       </>
     ),

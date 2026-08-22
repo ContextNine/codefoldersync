@@ -101,7 +101,7 @@ export function prepareLive(
         schemaVersion: 1,
         runId,
         seed,
-        productVersion: "0.1.0",
+        productVersion: "0.3.0",
         preparedAt: new Date().toISOString(),
         readiness,
         capabilities,

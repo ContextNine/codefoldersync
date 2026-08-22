@@ -11,9 +11,15 @@ import { randomUUID } from "node:crypto";
 import { homedir, platform, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import type { ProductConfig, ServiceStatus } from "./types.js";
+import type { ServiceStatus } from "./types.js";
 
-export const productVersion = "0.2.1";
+export const productVersion = "0.3.0";
+
+interface ServiceConfig {
+  readonly folderId: string;
+  readonly folderName: string;
+  readonly stateDir: string;
+}
 
 export interface ServiceOptions {
   readonly configPath: string;
@@ -105,7 +111,7 @@ export function installedVersions(installRoot?: string): readonly string[] {
 }
 
 export function installService(
-  config: ProductConfig,
+  config: ServiceConfig,
   options: ServiceOptions,
 ): ServiceStatus {
   const manager = serviceManager();
@@ -139,7 +145,7 @@ export function installService(
 }
 
 export function serviceStatus(
-  config: ProductConfig,
+  config: ServiceConfig,
   options: ServiceOptions,
 ): ServiceStatus {
   const manager = serviceManager();
@@ -166,7 +172,7 @@ export function serviceStatus(
 }
 
 export function startService(
-  config: ProductConfig,
+  config: ServiceConfig,
   options: ServiceOptions,
 ): void {
   const manager = serviceManager();
@@ -181,7 +187,7 @@ export function startService(
   }
 }
 
-export function stopService(config: ProductConfig): void {
+export function stopService(config: ServiceConfig): void {
   const manager = serviceManager();
   if (manager === "launchd") {
     const result = spawnSync(
@@ -211,7 +217,7 @@ export function stopService(config: ProductConfig): void {
   }
 }
 
-export function restartService(config: ProductConfig): void {
+export function restartService(config: ServiceConfig): void {
   const manager = serviceManager();
   if (manager === "launchd") {
     run("launchctl", [
@@ -227,7 +233,7 @@ export function restartService(config: ProductConfig): void {
 }
 
 export function uninstallService(
-  config: ProductConfig,
+  config: ServiceConfig,
   options: ServiceOptions,
 ): string {
   const definition = serviceDefinitionPath(config, options);
@@ -261,7 +267,7 @@ export function uninstallService(
   return recovery;
 }
 
-export function serviceLogPaths(config: ProductConfig): {
+export function serviceLogPaths(config: ServiceConfig): {
   readonly stdout: string;
   readonly stderr: string;
 } {
@@ -272,7 +278,7 @@ export function serviceLogPaths(config: ProductConfig): {
 }
 
 function launchdDefinition(
-  config: ProductConfig,
+  config: ServiceConfig,
   options: ServiceOptions,
 ): string {
   const logs = serviceLogPaths(config);
@@ -304,7 +310,7 @@ ${programArguments.map((argument) => `    <string>${xml(argument)}</string>`).jo
 }
 
 function systemdDefinition(
-  config: ProductConfig,
+  config: ServiceConfig,
   options: ServiceOptions,
 ): string {
   const logs = serviceLogPaths(config);
@@ -337,7 +343,7 @@ WantedBy=default.target
 
 function activateService(
   manager: "launchd" | "systemd",
-  config: ProductConfig,
+  config: ServiceConfig,
   definition: string,
 ): void {
   if (manager === "launchd") {
@@ -350,7 +356,7 @@ function activateService(
 }
 
 function serviceDefinitionPath(
-  config: ProductConfig,
+  config: ServiceConfig,
   options: ServiceOptions,
 ): string {
   const manager = serviceManager();
@@ -380,11 +386,11 @@ function serviceManager(): ServiceStatus["manager"] {
       : "unsupported";
 }
 
-function serviceLabel(config: ProductConfig): string {
+function serviceLabel(config: ServiceConfig): string {
   return `dev.codefoldersync.${config.folderId.replace(/[^A-Za-z0-9.-]/gu, "-")}`;
 }
 
-function serviceUnit(config: ProductConfig): string {
+function serviceUnit(config: ServiceConfig): string {
   return `codefoldersync-${config.folderId.replace(/[^A-Za-z0-9_.@-]/gu, "-")}.service`;
 }
 

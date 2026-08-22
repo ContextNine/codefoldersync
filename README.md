@@ -1,195 +1,191 @@
 # CodeFolderSync
 
-CodeFolderSync keeps a parent folder of Git repositories synchronized across your machines. It has no account, signup, browser flow, hosted control plane, or proprietary sync service. Peers use your existing SSH access and a hub directory on a machine you control.
+CodeFolderSync V3 recursively synchronizes an included Code folder across trusted machines. It discovers ordinary directories and Git repositories at any depth, uses a self-hosted local or SSH hub, and has no account or hosted control plane.
 
-Ordinary files sync as soon as they are saved. CodeFolderSync does not perform line-level merging. If two machines change the same file from the same base, the hub keeps the first accepted version at the original path and preserves every other version beside it:
+V3 is incompatible with V1 and V2. It uses schema and protocol version 3, a fresh folder ID, a fresh hub, signed configuration, new state, and a source-authoritative adoption workflow for populated targets.
 
-```text
-settings.json
-settings.CODEFOLDERSYNC-CONFLICT.laptop.91fd30a2.json
-```
+## Safety model
 
-The marker is deliberately grep-friendly:
-
-```bash
-rg --files ~/Code | rg 'CODEFOLDERSYNC-CONFLICT'
-find ~/Code -name '*CODEFOLDERSYNC-CONFLICT*'
-```
-
-## How it works
-
-- A native filesystem watcher queues a saved path immediately. A periodic metadata reconciliation catches missed or overflowed watcher events.
-- Regular files use streaming content-defined chunks. Unchanged chunks are never retransmitted.
-- New objects and one saved-file event travel in one bounded publish exchange over a persistent framed SSH process. Accepted baseline chunks are not resent.
-- Symlinks synchronize their exact target text and are never followed.
-- Directories have stable identities, so renaming a large directory is one metadata event rather than one operation per descendant.
-- Every accepted mutation is causally based and idempotently identified. The hub, not a client clock, chooses the canonical version.
-- `.git` data transfers incrementally but stages, validates, and swaps as one transaction. Concurrent Git states are preserved as explicit Git conflicts rather than merged file by file.
-- Local state, hub metadata, object bytes, the outbox, conflicts, and apply journals use durable SQLite or immutable content storage.
-
-The hub contains plaintext repository data and inherits the hub machine's filesystem permissions and backups. SSH authenticates and encrypts transport.
+- The initial authority seals one checkpoint. Targets cannot publish during adoption.
+- Target-only and divergent data moves to target-local `adoption-recovery` before canonical materialization.
+- Adoption never applies target state to the authority root.
+- Normal concurrent writes use the accepted hub checkpoint as the canonical side and preserve the other complete version under a `CODEFOLDERSYNC-CONFLICT` path.
+- File objects, manifests, event history, conflicts, and recovery are retained. Garbage collection is report-only.
+- Symlinks synchronize target text and are never followed.
+- Every contained `.git` boundary is captured and applied transactionally after `git fsck --full`. External Git directories stop setup or synchronization.
+- `.codefoldersync` and `.workspace-sync` are hard exclusions. `node_modules` is excluded by the generated default contract.
 
 ## Install
 
 CodeFolderSync requires Node.js 22 or newer. Download the release archive and checksum from [GitHub Releases](https://github.com/MDerman/codefoldersync/releases), verify them, extract the archive, then run:
 
 ```bash
-python3 codefoldersync-0.2.1/scripts/install.py
+python3 codefoldersync-0.3.0/scripts/install.py
 codefoldersync --version
 ```
 
 The release installer is idempotent and supports `--verify --json`. It installs a versioned build under `~/.local/lib/codefoldersync` and activates `~/.local/bin/codefoldersync` without requiring a repository checkout.
 
-For development, build and install the current checkout:
+Git is required for synchronized Git boundaries, and SSH is required for a remote hub. For development, pnpm builds and installs the current checkout:
 
 ```bash
 corepack pnpm install
+pnpm check
 pnpm build
 node dist/product-cli.js install
 ~/.local/bin/codefoldersync --version
 ```
 
-The installer copies the build to `~/.local/lib/codefoldersync/0.2.1/` and atomically activates `~/.local/bin/codefoldersync`. The wrapper records the absolute Node executable used during installation, so launchd/systemd and noninteractive shells do not depend on nvm or shell startup files.
+The installer copies the build to `~/.local/lib/codefoldersync/0.3.0/` and atomically activates `~/.local/bin/codefoldersync`. The wrapper records the absolute Node executable used during installation, so launchd/systemd and noninteractive shells do not depend on nvm or shell startup files. Install the same exact build on every peer and the hub host.
 
-Install the same build on the hub machine before configuring an SSH hub. `upgrade` installs another versioned build, and `rollback --version <version>` only changes the active wrapper.
+## Populated-fleet setup
 
-## Setup wizard
-
-Run this on the first machine:
+Interactive setup prompts for the authority and every populated target, requires a verified encrypted-backup witness ID and final approval, performs enrollment and adoption, and stops before cutover with services disabled:
 
 ```bash
-~/.local/bin/codefoldersync setup
+codefoldersync setup
 ```
 
-The wizard asks whether to create or join, which parent folder to synchronize, where the local or SSH hub lives, and the peer name. It probes case behavior, Unicode aliases, atomic rename, fsync, and symlink support before saving configuration. It can install and start a per-folder user service at the end.
-
-There is no login step.
-
-For automation, use the same validation path with flags:
+The authority-only primitive remains available for staged or distributed operation:
 
 ```bash
 codefoldersync setup \
-  --mode create \
-  --root /absolute/path/to/code \
-  --hub ssh://user@hub-host/absolute/path/to/hub \
-  --name my-code \
-  --peer laptop
+  --mode authority \
+  --root /absolute/path/to/Code \
+  --hub /absolute/path/to/new-hub \
+  --backup-witness <verified-witness-id> \
+  --peer mattbook
 ```
 
-The result prints a folder ID. On another machine, point an empty destination at the same hub:
+Setup creates authority-controlled files below each selected root:
+
+```text
+.codefoldersyncignore
+.codefoldersync/config.json
+.codefoldersync/authority.json
+.codefoldersync/README.txt
+```
+
+Runtime state lives outside the synchronized namespace and must share its filesystem with the root. The interactive wizard defaults to a hidden sibling of each root; authority-only setup defaults to `~/.local/state/codefoldersync/<folder-id>/` and rejects it when it is on a different filesystem.
+
+For a controller that can see every isolated root, the same complete populated-fleet ceremony is scriptable:
+
+```bash
+codefoldersync setup --mode fleet --spec /path/to/fleet-setup.json --approve
+```
+
+The JSON spec names the folder, verified backup witness, local or SSH hub, authority root/state/config, and each target root/state/config/request path. Interactive and scriptable setup create target-local keys, enroll and project the final signed adoption revision, seal the source, adopt each populated target, force-verify them, and stop with services disabled. They never perform cutover. Remote machines must first have the exact build, verified SSH route, credentials, and roots made available by the external fleet ceremony.
+
+## Enroll populated targets
+
+Each target generates its own peer key and a signed enrollment request. No private key leaves that target state directory.
 
 ```bash
 codefoldersync setup \
-  --mode join \
-  --folder-id <folder-id> \
-  --root /absolute/path/to/empty/code \
-  --hub ssh://user@hub-host/absolute/path/to/hub \
-  --peer desktop
+  --mode request \
+  --accepted-config /path/to/accepted-authority-config.json \
+  --root /absolute/target/Code \
+  --state /absolute/target/state \
+  --peer wootbook \
+  --request /absolute/path/wootbook-request.json
 ```
 
-SSH hubs default to `~/.local/bin/codefoldersync` on the remote host. Advanced or test installations can override this with `--remote-command` and `--remote-node`.
+The authority reviews and enrolls it:
 
-The synchronized root may contain only direct-child repositories with an in-tree `.git` directory, plus an optional `.codefoldersyncignore`. Product state and the hub must be outside that root and on the same filesystem as the root when atomic recovery requires it.
+```bash
+codefoldersync setup \
+  --mode enroll \
+  --config /authority/Code/.codefoldersync/config.json \
+  --request /path/wootbook-request.json
+```
 
-## Routine operation
+Project the resulting accepted revision back to the target:
+
+```bash
+codefoldersync setup \
+  --mode activate \
+  --accepted-config /path/to/latest-accepted-config.json \
+  --state /absolute/target/state \
+  --request /path/wootbook-request.json
+```
+
+Repeat enrollment for every target before sealing the source, then distribute the latest accepted revision to all peers.
+
+## Adoption
+
+```bash
+codefoldersync adoption seal --config /authority/config.json
+codefoldersync adoption plan --config /target/config.json
+codefoldersync adoption apply --adoption-id <id> --config /target/config.json
+codefoldersync adoption verify --config /target/config.json
+```
+
+`plan` does not mutate the target tree. `apply` revalidates the approved target digest, preserves conflicts out of root, materializes the seal, force-hashes the result, verifies Git boundaries, and records the target as verified.
+
+After every enrolled target verifies, cutover requires an explicit approval flag:
+
+```bash
+codefoldersync adoption cutover --approve --config /authority/config.json
+```
+
+The signed barrier advances the hub to normal mode. It does not start services. Project the new accepted revision to every target and start services one at a time only after the intended operational approval.
+
+## Normal operation
 
 ```bash
 codefoldersync doctor
 codefoldersync status
 codefoldersync sync
 codefoldersync verify --full
-codefoldersync service status
-codefoldersync service logs
+codefoldersync config status
+codefoldersync catalog status
+codefoldersync conflicts
+codefoldersync history
 ```
 
-The foreground daemon is also available for a custom supervisor:
+The catalog is derived. V3 has no repository or folder membership mutation commands.
 
-```bash
-codefoldersync daemon --config /absolute/path/to/config.json
-```
-
-The daemon is the only allowed writer for its configured folder. A mutating foreground command fails closed while the daemon is active; stop the service first for deliberate maintenance and start it again afterward.
-
-Manage the generated user-level launchd or systemd service with:
+Services install disabled unless `--activate` is explicitly supplied, and cannot start before cutover:
 
 ```bash
 codefoldersync service install
 codefoldersync service start
-codefoldersync service restart
-codefoldersync service stop
-codefoldersync service uninstall
+codefoldersync service status
+codefoldersync service logs
 ```
 
-Uninstalling a service does not delete synchronized files, configuration, local objects, recovery data, or hub state.
-
-Repository membership and ignore rules are explicit:
+Recover retained adoption evidence to an absent path without deleting the retained original:
 
 ```bash
-codefoldersync repository add new-repo
-codefoldersync repository remove old-repo
-codefoldersync repository refresh
-codefoldersync ignore push
-codefoldersync ignore pull
+codefoldersync recover <conflict-id> --to /absolute/absent/path
 ```
 
-Removing repository membership never deletes the repository from disk.
+## Ignore contract
 
-## Conflicts and recovery
+The authority-controlled root file uses deterministic Git-ignore-style rules with anchoring, directory rules, `**`, comments, blank lines, and negation. The generated minimum is:
 
-List ordinary and Git conflicts:
+```gitignore
+/.codefoldersync/
+/.workspace-sync/
+**/node_modules/
+```
+
+V3 does not reuse `.gitignore`. A target whose ignore digest differs from the accepted configuration fails closed.
+
+On the authority, preserve the previously accepted ignore file, edit the live file, preview its path/byte delta, then approve a signed revision:
 
 ```bash
-codefoldersync conflicts
-codefoldersync history atlas
+codefoldersync config update-ignore --previous-ignore /path/to/previous.ignore
+codefoldersync config update-ignore --previous-ignore /path/to/previous.ignore --approve
 ```
 
-Ordinary-file conflicts already exist as normal sibling files and need no product-specific merge command. Inspect them, keep or combine the content you want, and delete the extra copy like any other file.
-
-Git metadata conflicts are whole validated `.git` states. Select one explicitly:
-
-```bash
-codefoldersync resolve-git <conflict-id> --take canonical
-codefoldersync resolve-git <conflict-id> --take conflict
-```
-
-Recover any retained manifest without changing the synchronized folder:
-
-```bash
-codefoldersync recover <manifest-or-conflict-id> --to /absolute/empty/path
-```
-
-Offline edits remain in the durable outbox. Corrupt objects, unsafe paths, ambiguous local changes, protocol mismatch, disk errors, and failed Git validation stop affected work without replacing the local version.
-
-Garbage collection is report-only in V2:
-
-```bash
-codefoldersync gc --dry-run
-```
-
-Automatic deletion is disabled. `migrate-v1 --dry-run --root <path>` provides a read-only inventory for side-by-side migration to a fresh V2 folder and hub.
+Project the accepted revision and exact ignore file to every peer before synchronization resumes.
 
 ## Verification
 
-The focused V2 suite contains six integration tests covering incremental chunks and symlinks, deterministic conflicts and directory moves, transactional Git states and corruption rejection, setup/install/services/repository membership, watcher latency, and three-peer churn. The repository also retains the earlier adversarial safety-harness tests.
-
 ```bash
 pnpm check
+pnpm build
 ```
 
-Fleet and scale evidence is committed under `results/`, including the 100k-file, sub-two-second latency, deterministic three-way conflict, and 10,000-operation V2 run. Tests use generated, sentinel-protected roots outside every machine's `~/Code`.
-
-## Local website and documentation
-
-The CTX9-style product site lives in `site/` and is intentionally local-only.
-It includes the landing page and user guides for installation, setup, sync
-behavior, conflicts, recovery, operations, safety, backups, the CLI, and
-troubleshooting.
-
-```bash
-cd site
-npm install
-npm run dev -- --hostname 127.0.0.1
-```
-
-Verify it with `npm run lint` and `npm test`. Do not publish or deploy the site
-without an explicit hosting decision.
+The focused V3 integration suite uses fresh temporary roots. It covers two populated target adoptions, recovery evidence, exact source immutability, source-seal/adoption/normal-apply/cutover interruption recovery, physical and contained-indirection Git convergence, signed cutover, atomic snapshot/conflict publication, recursive normal synchronization, immutable directory conflicts, rename cycles, keep-both conflicts, metadata-only directory moves, corrupt-object rejection, reserved and ignored paths, configuration/ignore tamper rejection, portable-name collisions, special filesystem objects, and external Git-dir rejection. It never targets a daily-driver Code folder or service.
