@@ -2,6 +2,8 @@
 
 CodeFolderSync V3 recursively synchronizes an included Code folder across trusted machines. It discovers ordinary directories and Git repositories at any depth, uses a self-hosted local or SSH hub, and has no account or hosted control plane.
 
+Architecture, protocol, safety, operations, and maintainer documentation is indexed in [`docs/README.md`](docs/README.md).
+
 V3 is incompatible with V1 and V2. It uses schema and protocol version 3, a fresh folder ID, a fresh hub, signed configuration, new state, and a source-authoritative adoption workflow for populated targets.
 
 ## Safety model

@@ -14,4 +14,6 @@ This repository owns the CodeFolderSync product and its destructive-systems safe
 - Tests must include deliberate work loss/corruption and prove the verifier rejects it.
 - Use per-command fixture Git identity. Do not read or change global Git configuration.
 
+Repository-specific documentation lives in `docs/`. Update the relevant document with sync-engine, protocol, storage, recovery, safety, installation, operations, or verification changes and keep `docs/README.md` current.
+
 Keep the focused V3 product integration suite at ten tests or fewer. Run `pnpm check` before committing.
