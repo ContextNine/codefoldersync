@@ -307,7 +307,7 @@ async function collectTarDiagnostics(
   const acceptLine = (line: string): void => {
     if (
       archivePlatform === "macos" &&
-      /^tar: Ignoring unknown extended header keyword 'LIBARCHIVE\.(?:creationtime|xattr\.com\.apple\.[^'\r\n]+)'$/u.test(
+      /^tar: Ignoring unknown extended header keyword '(?:LIBARCHIVE\.(?:creationtime|xattr\.[^'\r\n]+)|SCHILY\.fflags)'$/u.test(
         line,
       )
     ) {

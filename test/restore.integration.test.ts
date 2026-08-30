@@ -60,6 +60,8 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
       "--zstd",
       "--format=pax",
       "--pax-option=LIBARCHIVE.creationtime:=123",
+      "--pax-option=LIBARCHIVE.xattr.com.docker.grpcfuse.ownership:=501:20",
+      "--pax-option=SCHILY.fflags:=uchg",
       `--file=${archive}`,
       "--directory",
       source,
@@ -107,7 +109,7 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
     const result = await restoreEncryptedMaster(spec);
     assert.equal(result.ciphertextSha256, ciphertextSha256);
     assert.equal(result.ciphertextBytes, ciphertextBytes);
-    assert.ok(result.ignoredArchiveMetadataRecords > 0);
+    assert.ok(result.ignoredArchiveMetadataRecords >= 3);
     assert.equal(result.protected, true);
     assert.equal(result.witness.files, 4);
     assert.equal(result.witness.symlinks, 1);
