@@ -59,6 +59,7 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - distributed setup runs through process-isolated product commands and requires the same recorded release SHA-256 everywhere;
 - preparation stops before target mutation and each target apply requires its exact adoption ID;
 - every remote mutation boundary resumes after the operation completed but its response was lost;
+- `test/real-ssh-response-loss.ts` drives a strict canonical SSH route through a sentinel-qualified remote wrapper that closes the first completed setup response, then requires exact identity reuse, clean seal, and clean verification;
 - pseudo-fleet acceptance creates two fresh fleets with new roots, identities, hubs, and controller state;
 - both repetitions copy the same witnessed masters, apply the same deterministic 64-file cassette, and require exact final semantic digests;
 - the AI workload requires at least 50 changed TypeScript files across eight directories, verifies required create, move, and delete behavior, records a private cassette, and replays it to the same final digest;
