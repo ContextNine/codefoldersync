@@ -19,6 +19,7 @@ export interface EncryptedMasterRestoreSpec {
   readonly runId: string;
   readonly snapshotId: string;
   readonly machineId: string;
+  readonly archivePlatform: "linux" | "macos";
   readonly destinationBase: string;
   readonly destination: string;
   readonly bundleDirectory: string;
@@ -32,6 +33,7 @@ export interface EncryptedMasterRestoreResult {
   readonly machineId: string;
   readonly ciphertextSha256: string;
   readonly ciphertextBytes: number;
+  readonly ignoredArchiveMetadataRecords: number;
   readonly protected: true;
   readonly witness: TreeWitness;
 }
@@ -59,6 +61,7 @@ export function readEncryptedMasterRestoreSpec(
     !safeId(input.runId) ||
     !safeId(input.snapshotId) ||
     !safeId(input.machineId) ||
+    (input.archivePlatform !== "linux" && input.archivePlatform !== "macos") ||
     typeof input.destinationBase !== "string" ||
     typeof input.destination !== "string" ||
     typeof input.bundleDirectory !== "string" ||
@@ -124,7 +127,12 @@ export async function restoreEncryptedMaster(
 
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   mkdirSync(staging, { mode: 0o700 });
-  await extractArchive(archive, resolve(spec.identityPath), staging);
+  const ignoredArchiveMetadataRecords = await extractArchive(
+    archive,
+    resolve(spec.identityPath),
+    staging,
+    spec.archivePlatform,
+  );
   const stagingEntries = readdirSync(staging, { withFileTypes: true });
   if (
     stagingEntries.length !== 1 ||
@@ -154,6 +162,7 @@ export async function restoreEncryptedMaster(
     machineId: spec.machineId,
     ciphertextSha256: digest,
     ciphertextBytes: artifact.size,
+    ignoredArchiveMetadataRecords,
     protected: true,
     witness: finalWitness,
   };
@@ -163,7 +172,8 @@ async function extractArchive(
   archive: string,
   identity: string,
   staging: string,
-): Promise<void> {
+  archivePlatform: EncryptedMasterRestoreSpec["archivePlatform"],
+): Promise<number> {
   const age = spawn("age", ["--decrypt", "--identity", identity, archive], {
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -186,20 +196,23 @@ async function extractArchive(
     throw new Error("Restore pipeline could not connect");
   age.stdout.pipe(tar.stdin);
   const ageError = collectBounded(age.stderr);
-  const tarError = collectBounded(tar.stderr);
+  const tarError = collectTarDiagnostics(tar.stderr, archivePlatform);
   const [ageStatus, tarStatus] = await Promise.all([
     closeStatus(age),
     closeStatus(tar),
   ]);
-  const ageStderr = await ageError;
-  const tarStderr = await tarError;
+  const ageDiagnostics = await ageError;
+  const tarDiagnostics = await tarError;
   if (
     ageStatus !== 0 ||
     tarStatus !== 0 ||
-    ageStderr.length > 0 ||
-    tarStderr.length > 0
+    ageDiagnostics.overflow ||
+    tarDiagnostics.overflow ||
+    ageDiagnostics.output.length > 0 ||
+    tarDiagnostics.output.length > 0
   )
     throw new Error("Encrypted restore pipeline failed or emitted a warning");
+  return tarDiagnostics.ignoredArchiveMetadataRecords;
 }
 
 function protectTree(root: string): void {
@@ -254,18 +267,71 @@ async function fileSha256(path: string): Promise<string> {
 
 async function collectBounded(
   stream: NodeJS.ReadableStream | null,
-): Promise<Buffer> {
-  if (stream === null) return Buffer.alloc(0);
+): Promise<BoundedDiagnostics> {
+  if (stream === null) return { output: Buffer.alloc(0), overflow: false };
   const chunks: Buffer[] = [];
   let bytes = 0;
+  let overflow = false;
   for await (const chunk of stream) {
     const value = Buffer.from(chunk);
     bytes += value.length;
-    if (bytes > 1024 * 1024)
-      throw new Error("Restore diagnostic output exceeded 1 MiB");
-    chunks.push(value);
+    if (bytes <= 1024 * 1024) chunks.push(value);
+    else overflow = true;
   }
-  return Buffer.concat(chunks);
+  return { output: Buffer.concat(chunks), overflow };
+}
+
+interface BoundedDiagnostics {
+  readonly output: Buffer;
+  readonly overflow: boolean;
+}
+
+interface TarDiagnostics extends BoundedDiagnostics {
+  readonly ignoredArchiveMetadataRecords: number;
+}
+
+async function collectTarDiagnostics(
+  stream: NodeJS.ReadableStream | null,
+  archivePlatform: EncryptedMasterRestoreSpec["archivePlatform"],
+): Promise<TarDiagnostics> {
+  if (stream === null)
+    return {
+      output: Buffer.alloc(0),
+      overflow: false,
+      ignoredArchiveMetadataRecords: 0,
+    };
+  const unexpected: Buffer[] = [];
+  let unexpectedBytes = 0;
+  let overflow = false;
+  let ignoredArchiveMetadataRecords = 0;
+  let pending = "";
+  const acceptLine = (line: string): void => {
+    if (
+      archivePlatform === "macos" &&
+      /^tar: Ignoring unknown extended header keyword 'LIBARCHIVE\.(?:creationtime|xattr\.com\.apple\.[^'\r\n]+)'$/u.test(
+        line,
+      )
+    ) {
+      ignoredArchiveMetadataRecords += 1;
+      return;
+    }
+    const value = Buffer.from(`${line}\n`);
+    unexpectedBytes += value.length;
+    if (unexpectedBytes <= 1024 * 1024) unexpected.push(value);
+    else overflow = true;
+  };
+  for await (const chunk of stream) {
+    pending += Buffer.from(chunk).toString("utf8");
+    const lines = pending.split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) acceptLine(line.replace(/\r$/u, ""));
+  }
+  if (pending.length > 0) acceptLine(pending.replace(/\r$/u, ""));
+  return {
+    output: Buffer.concat(unexpected),
+    overflow,
+    ignoredArchiveMetadataRecords,
+  };
 }
 
 function closeStatus(child: ReturnType<typeof spawn>): Promise<number | null> {

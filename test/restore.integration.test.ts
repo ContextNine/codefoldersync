@@ -55,6 +55,8 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
     run("tar", [
       "--create",
       "--zstd",
+      "--format=pax",
+      "--pax-option=LIBARCHIVE.creationtime:=123",
       `--file=${archive}`,
       "--directory",
       source,
@@ -93,6 +95,7 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
       runId,
       snapshotId,
       machineId,
+      archivePlatform: "macos" as const,
       destinationBase,
       destination,
       bundleDirectory: bundle,
@@ -101,6 +104,7 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
     const result = await restoreEncryptedMaster(spec);
     assert.equal(result.ciphertextSha256, ciphertextSha256);
     assert.equal(result.ciphertextBytes, ciphertextBytes);
+    assert.ok(result.ignoredArchiveMetadataRecords > 0);
     assert.equal(result.protected, true);
     assert.equal(result.witness.files, 2);
     assert.equal(result.witness.symlinks, 1);
