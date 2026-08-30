@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -30,4 +30,22 @@ test("release installer is idempotent and verifies exact version", () => {
   assert.equal(JSON.parse(second.stdout).changed, false);
   assert.equal(verified.status, 0, verified.stderr);
   assert.equal(JSON.parse(verified.stdout).ready, true);
+
+  const helpRoot = join(root, "help-must-not-install");
+  const help = spawnSync(
+    process.execPath,
+    [
+      join(process.cwd(), "dist", "product-cli.js"),
+      "install",
+      "--help",
+      "--install-root",
+      helpRoot,
+      "--bin-dir",
+      join(root, "help-bin"),
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /^Usage: codefoldersync install/u);
+  assert.equal(existsSync(helpRoot), false);
 });

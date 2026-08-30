@@ -208,6 +208,12 @@ async function main(): Promise<void> {
 }
 
 function runInstall(commandArgs: readonly string[]): void {
+  if (flag(commandArgs, "--help")) {
+    process.stdout.write(
+      "Usage: codefoldersync install [--built <dir>] [--install-root <dir>] [--bin-dir <dir>] [--release-sha256 <sha256>]\n",
+    );
+    return;
+  }
   const built = resolve(
     option(commandArgs, "--built") ?? dirname(fileURLToPath(import.meta.url)),
   );
