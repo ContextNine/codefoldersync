@@ -1481,6 +1481,12 @@ function minimalEnvironment(): NodeJS.ProcessEnv {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     LANG: process.env.LANG ?? "C.UTF-8",
+    ...(process.env.XDG_RUNTIME_DIR === undefined
+      ? {}
+      : { XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }),
+    ...(process.env.DBUS_SESSION_BUS_ADDRESS === undefined
+      ? {}
+      : { DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS }),
   };
 }
 
