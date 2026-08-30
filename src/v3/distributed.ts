@@ -100,6 +100,10 @@ export interface DistributedExecutor {
     machine: DistributedMachineSpec,
     config: ProductConfig,
   ): Promise<SyncSummary>;
+  cutover(
+    machine: DistributedMachineSpec,
+    config: ProductConfig,
+  ): Promise<ProductConfig>;
 }
 
 interface DistributedJournal {
@@ -115,6 +119,8 @@ interface DistributedJournal {
   plans: Record<string, AdoptionPlan>;
   applied: Record<string, SyncSummary>;
   verified: Record<string, SyncSummary>;
+  cutover: ProductConfig | null;
+  projectedNormal: Record<string, ProductConfig>;
 }
 
 export interface DistributedSetupReport {
@@ -131,6 +137,11 @@ export interface DistributedSetupReport {
     readonly applied: boolean;
     readonly verified: boolean;
   }[];
+}
+
+export interface DistributedCutoverReport extends DistributedSetupReport {
+  readonly lifecycle: "normal";
+  readonly configRevision: number;
 }
 
 export function readDistributedFleetSpec(path: string): DistributedFleetSpec {
@@ -264,6 +275,41 @@ export async function applyDistributedTargetV3(
   return report(spec, journal, true);
 }
 
+/** Isolated acceptance calls this only after every target approval and verify.
+ * The public distributed setup command still stops before cutover. */
+export async function cutoverDistributedAcceptanceV3(
+  spec: DistributedFleetSpec,
+  executor: DistributedExecutor,
+): Promise<DistributedCutoverReport> {
+  validateDistributedFleetSpec(spec);
+  await verifyBuilds(spec, executor);
+  const journal = readJournal(spec);
+  if (journal === null) throw new Error("Distributed setup is not prepared");
+  if (!spec.targets.every((target) => journal.verified[target.machineId]))
+    throw new Error("Distributed acceptance cutover requires verified targets");
+  if (journal.cutover === null) {
+    journal.cutover = await executor.cutover(
+      spec.authority,
+      requiredAuthority(journal),
+    );
+    writeJournal(spec, journal);
+  }
+  for (const target of spec.targets) {
+    if (journal.projectedNormal[target.machineId] !== undefined) continue;
+    journal.projectedNormal[target.machineId] = await executor.activatePeer(
+      target,
+      journal.cutover,
+      requiredRequest(journal, target.machineId),
+    );
+    writeJournal(spec, journal);
+  }
+  return {
+    ...report(spec, journal, true),
+    lifecycle: "normal",
+    configRevision: journal.cutover.revision,
+  };
+}
+
 function report(
   spec: DistributedFleetSpec,
   journal: DistributedJournal | null,
@@ -327,6 +373,8 @@ function readOrCreateJournal(spec: DistributedFleetSpec): DistributedJournal {
     plans: {},
     applied: {},
     verified: {},
+    cutover: null,
+    projectedNormal: {},
   };
   writeJournal(spec, journal);
   return journal;
@@ -347,6 +395,8 @@ function readJournal(spec: DistributedFleetSpec): DistributedJournal | null {
     throw new Error(
       "Distributed setup journal does not match this specification",
     );
+  journal.cutover ??= null;
+  journal.projectedNormal ??= {};
   return journal;
 }
 

@@ -31,10 +31,15 @@ export interface AiWriterSpec {
   readonly pollIntervalMs: number;
 }
 
-interface SnapshotEntry {
+export interface AiWorkspaceEntry {
   readonly digest: string;
   readonly bytes: number;
   readonly mode: number;
+}
+
+export interface AiPathState {
+  readonly pathHash: string;
+  readonly stateDigest: string | null;
 }
 
 interface MutationCassette {
@@ -71,6 +76,7 @@ export interface AiWriterResult {
   readonly writerDurationMs: number;
   readonly firstChangeMs: number;
   readonly lastChangeMs: number;
+  readonly finalPathStates: readonly AiPathState[];
   readonly passed: true;
 }
 
@@ -111,12 +117,15 @@ export function createAiWorkloadFixture(workspace: string): void {
     `${JSON.stringify({ name: "codefoldersync-ai-workload", private: true, type: "module", scripts: { test: "node verify.mjs" } }, null, 2)}\n`,
     { encoding: "utf8", mode: 0o600, flag: "wx" },
   );
+  runFixtureGit(root, ["init"]);
+  runFixtureGit(root, ["add", "--all"]);
+  runFixtureGit(root, ["commit", "-m", "fixture: initial AI workload"]);
 }
 
 export async function runAiWriter(spec: AiWriterSpec): Promise<AiWriterResult> {
   validateWriterSpec(spec);
-  const initial = snapshot(spec.workspace);
-  const initialDigest = snapshotDigest(initial);
+  const initial = snapshotAiWorkspace(spec.workspace);
+  const initialDigest = aiWorkspaceDigest(initial);
   const firstObserved = new Map<string, number>();
   let previous = initial;
   let closed = false;
@@ -124,7 +133,7 @@ export async function runAiWriter(spec: AiWriterSpec): Promise<AiWriterResult> {
   const monitor = (async () => {
     while (!closed) {
       await delay(spec.pollIntervalMs);
-      const current = snapshot(spec.workspace);
+      const current = snapshotAiWorkspace(spec.workspace);
       recordChanges(
         previous,
         current,
@@ -136,38 +145,49 @@ export async function runAiWriter(spec: AiWriterSpec): Promise<AiWriterResult> {
   })();
   const command = spec.command[0];
   if (command === undefined) throw new Error("AI writer command is missing");
-  const childResult = await new Promise<{
-    readonly status: number;
-    readonly bytes: number;
-  }>((resolvePromise, reject) => {
-    const child = spawn(command, spec.command.slice(1), {
-      cwd: spec.workspace,
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        LANG: process.env.LANG ?? "C.UTF-8",
-        CODEFOLDERSYNC_AI_WORKSPACE: spec.workspace,
-      },
+  let childResult: { readonly status: number; readonly bytes: number };
+  try {
+    childResult = await new Promise<{
+      readonly status: number;
+      readonly bytes: number;
+    }>((resolvePromise, reject) => {
+      const child = spawn(command, spec.command.slice(1), {
+        cwd: spec.workspace,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          LANG: process.env.LANG ?? "C.UTF-8",
+          CODEFOLDERSYNC_AI_WORKSPACE: spec.workspace,
+        },
+      });
+      let bytes = 0;
+      const count = (chunk: Buffer): void => {
+        bytes += chunk.length;
+        if (bytes > 16 * 1024 * 1024) child.kill("SIGTERM");
+      };
+      child.stdout.on("data", count);
+      child.stderr.on("data", count);
+      child.on("error", reject);
+      child.on("close", (status) =>
+        resolvePromise({ status: status ?? 1, bytes }),
+      );
+      child.stdin.end(`${spec.prompt}\n`);
+      let forced: NodeJS.Timeout | undefined;
+      const timeout = setTimeout(() => {
+        child.kill("SIGTERM");
+        forced = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      }, spec.timeoutMs);
+      child.once("close", () => {
+        clearTimeout(timeout);
+        if (forced !== undefined) clearTimeout(forced);
+      });
     });
-    let bytes = 0;
-    const count = (chunk: Buffer): void => {
-      bytes += chunk.length;
-      if (bytes > 16 * 1024 * 1024) child.kill("SIGTERM");
-    };
-    child.stdout.on("data", count);
-    child.stderr.on("data", count);
-    child.on("error", reject);
-    child.on("close", (status) =>
-      resolvePromise({ status: status ?? 1, bytes }),
-    );
-    child.stdin.end(`${spec.prompt}\n`);
-    const timeout = setTimeout(() => child.kill("SIGTERM"), spec.timeoutMs);
-    child.once("close", () => clearTimeout(timeout));
-  });
-  closed = true;
-  await monitor;
-  const final = snapshot(spec.workspace);
+  } finally {
+    closed = true;
+    await monitor;
+  }
+  const final = snapshotAiWorkspace(spec.workspace);
   recordChanges(previous, final, firstObserved, performance.now() - started);
   if (childResult.bytes > 16 * 1024 * 1024)
     throw new Error("AI writer output exceeded 16 MiB");
@@ -182,7 +202,12 @@ export async function runAiWriter(spec: AiWriterSpec): Promise<AiWriterResult> {
   );
   if (verification.status !== 0)
     throw new Error("AI workload verification failed");
-  const changes = changedPaths(initial, final);
+  if (
+    final["verify.mjs"]?.digest !== initial["verify.mjs"]?.digest ||
+    final["verify.mjs"]?.mode !== initial["verify.mjs"]?.mode
+  )
+    throw new Error("AI workload changed its verifier");
+  const changes = changedAiWorkspacePaths(initial, final);
   const codeChanges = changes.filter((path) => path.endsWith(".ts"));
   const changedDirectories = new Set(codeChanges.map((path) => dirname(path)))
     .size;
@@ -235,6 +260,10 @@ export async function runAiWriter(spec: AiWriterSpec): Promise<AiWriterResult> {
     writerDurationMs: milliseconds(performance.now() - started),
     firstChangeMs: milliseconds(observed[0] ?? 0),
     lastChangeMs: milliseconds(observed.at(-1) ?? 0),
+    finalPathStates: changes.map((path) => ({
+      pathHash: hashText(path),
+      stateDigest: aiPathStateDigest(final[path]),
+    })),
     passed: true,
   };
 }
@@ -244,8 +273,8 @@ export function replayAiMutationCassette(
   workspace: string,
 ): { readonly finalDigest: string; readonly operations: number } {
   const cassette = readCassette(cassettePath);
-  const initial = snapshot(workspace);
-  if (snapshotDigest(initial) !== cassette.initialDigest)
+  const initial = snapshotAiWorkspace(workspace);
+  if (aiWorkspaceDigest(initial) !== cassette.initialDigest)
     throw new Error("AI replay fixture does not match the cassette baseline");
   for (const operation of cassette.operations) {
     const path = safeWorkspacePath(workspace, operation.path);
@@ -262,7 +291,7 @@ export function replayAiMutationCassette(
     renameSync(temporary, path);
     chmodSync(path, operation.mode);
   }
-  const finalDigest = snapshotDigest(snapshot(workspace));
+  const finalDigest = aiWorkspaceDigest(snapshotAiWorkspace(workspace));
   if (finalDigest !== cassette.finalDigest)
     throw new Error("AI mutation replay differs from the recorded final tree");
   return { finalDigest, operations: cassette.operations.length };
@@ -270,11 +299,11 @@ export function replayAiMutationCassette(
 
 function createCassette(
   spec: AiWriterSpec,
-  initial: Readonly<Record<string, SnapshotEntry>>,
-  final: Readonly<Record<string, SnapshotEntry>>,
+  initial: Readonly<Record<string, AiWorkspaceEntry>>,
+  final: Readonly<Record<string, AiWorkspaceEntry>>,
   firstObserved: ReadonlyMap<string, number>,
 ): MutationCassette {
-  const operations = changedPaths(initial, final)
+  const operations = changedAiWorkspacePaths(initial, final)
     .map((path) => {
       const observed = milliseconds(firstObserved.get(path) ?? spec.timeoutMs);
       const entry = final[path];
@@ -298,19 +327,22 @@ function createCassette(
   return {
     schemaVersion: 1,
     promptDigest: hashText(spec.prompt),
-    initialDigest: snapshotDigest(initial),
-    finalDigest: snapshotDigest(final),
+    initialDigest: aiWorkspaceDigest(initial),
+    finalDigest: aiWorkspaceDigest(final),
     operations,
   };
 }
 
-function snapshot(root: string): Record<string, SnapshotEntry> {
-  const result: Record<string, SnapshotEntry> = {};
+export function snapshotAiWorkspace(
+  root: string,
+): Record<string, AiWorkspaceEntry> {
+  const result: Record<string, AiWorkspaceEntry> = {};
   const absoluteRoot = resolve(root);
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
       (a, b) => Buffer.from(a.name).compare(Buffer.from(b.name)),
     )) {
+      if (directory === absoluteRoot && entry.name === ".git") continue;
       const path = join(directory, entry.name);
       const stat = lstatSync(path);
       const local = relative(absoluteRoot, path).split(sep).join("/");
@@ -332,8 +364,38 @@ function snapshot(root: string): Record<string, SnapshotEntry> {
   return result;
 }
 
-function snapshotDigest(
-  snapshotValue: Readonly<Record<string, SnapshotEntry>>,
+function runFixtureGit(root: string, args: readonly string[]): void {
+  const result = spawnSync(
+    "git",
+    [
+      "-C",
+      root,
+      "-c",
+      "user.name=CodeFolderSync Acceptance",
+      "-c",
+      "user.email=acceptance@invalid.example",
+      "-c",
+      "core.hooksPath=/dev/null",
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        LANG: process.env.LANG ?? "C.UTF-8",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    },
+  );
+  if (result.status !== 0)
+    throw new Error("AI workload fixture Git setup failed");
+}
+
+export function aiWorkspaceDigest(
+  snapshotValue: Readonly<Record<string, AiWorkspaceEntry>>,
 ): string {
   return hashText(
     canonicalJson(
@@ -344,9 +406,9 @@ function snapshotDigest(
   );
 }
 
-function changedPaths(
-  before: Readonly<Record<string, SnapshotEntry>>,
-  after: Readonly<Record<string, SnapshotEntry>>,
+export function changedAiWorkspacePaths(
+  before: Readonly<Record<string, AiWorkspaceEntry>>,
+  after: Readonly<Record<string, AiWorkspaceEntry>>,
 ): string[] {
   return [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter(
@@ -358,13 +420,19 @@ function changedPaths(
 }
 
 function recordChanges(
-  before: Readonly<Record<string, SnapshotEntry>>,
-  after: Readonly<Record<string, SnapshotEntry>>,
+  before: Readonly<Record<string, AiWorkspaceEntry>>,
+  after: Readonly<Record<string, AiWorkspaceEntry>>,
   firstObserved: Map<string, number>,
   elapsedMs: number,
 ): void {
-  for (const path of changedPaths(before, after))
+  for (const path of changedAiWorkspacePaths(before, after))
     if (!firstObserved.has(path)) firstObserved.set(path, elapsedMs);
+}
+
+export function aiPathStateDigest(
+  entry: AiWorkspaceEntry | undefined,
+): string | null {
+  return entry === undefined ? null : hashText(canonicalJson(entry));
 }
 
 function readCassette(path: string): MutationCassette {

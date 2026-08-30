@@ -10,6 +10,7 @@ import {
 } from "./config.js";
 import {
   applyAdoptionV3,
+  cutoverAdoptionV3,
   planAdoptionV3,
   sealSourceV3,
   verifyFullV3,
@@ -78,6 +79,11 @@ type AgentRequest =
     }
   | {
       readonly action: "seal-source" | "verify";
+      readonly configPath: string;
+      readonly expected: ConfigExpectation;
+    }
+  | {
+      readonly action: "cutover";
       readonly configPath: string;
       readonly expected: ConfigExpectation;
     }
@@ -216,6 +222,19 @@ export class ProcessDistributedExecutor implements DistributedExecutor {
       }),
     );
   }
+
+  public async cutover(
+    machine: DistributedMachineSpec,
+    config: ProductConfig,
+  ): Promise<ProductConfig> {
+    return productConfig(
+      await callAgent(machine, {
+        action: "cutover",
+        configPath: machine.configPath,
+        expected: expectation(config),
+      }),
+    );
+  }
 }
 
 export async function runDistributedAgent(request: unknown): Promise<unknown> {
@@ -301,6 +320,18 @@ export async function runDistributedAgent(request: unknown): Promise<unknown> {
     case "verify": {
       const config = expectedLocalConfig(input.configPath, input.expected);
       return verifyFullV3(config);
+    }
+    case "cutover": {
+      const current = loadConfig(input.configPath);
+      if (
+        current.folderId === input.expected.folderId &&
+        current.peerId === input.expected.peerId &&
+        current.revision === input.expected.revision + 1 &&
+        current.lifecycle === "normal"
+      )
+        return current;
+      const config = expectedLocalConfig(input.configPath, input.expected);
+      return cutoverAdoptionV3(config, input.configPath);
     }
   }
 }
@@ -423,7 +454,8 @@ function agentRequest(value: unknown): AgentRequest {
     action !== "seal-source" &&
     action !== "plan-adoption" &&
     action !== "apply-adoption" &&
-    action !== "verify"
+    action !== "verify" &&
+    action !== "cutover"
   )
     throw new Error("Distributed agent action is invalid");
   return value as AgentRequest;

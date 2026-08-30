@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import {
   createTreeWitness,
@@ -25,12 +26,18 @@ import {
 import type { DistributedFleetSpec } from "../src/v3/distributed.js";
 import {
   applyDistributedTargetV3,
+  cutoverDistributedAcceptanceV3,
   prepareDistributedSetupV3,
   type DistributedExecutor,
 } from "../src/v3/distributed.js";
 import { ProcessDistributedExecutor } from "../src/v3/distributed-process.js";
+import {
+  runVisibilityObserver,
+  type VisibilityEvent,
+} from "../src/v3/visibility.js";
+import { runIsolatedAgent } from "../src/v3/isolated.js";
 
-test("distributed setup previews, prepares, resumes, and applies one approved target at a time", () => {
+test("distributed setup previews, prepares, resumes, and applies one approved target at a time", async () => {
   const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-distributed-"));
   const runId = "distributed-integration-001";
   const releaseSha256 = "b".repeat(64);
@@ -154,6 +161,18 @@ test("distributed setup previews, prepares, resumes, and applies one approved ta
     const final = run([]);
     assert.equal(final.status, 0, final.stderr);
     assert.equal(JSON.parse(final.stdout).cutoverReady, true);
+    const cutover = await cutoverDistributedAcceptanceV3(
+      spec,
+      new ProcessDistributedExecutor(),
+    );
+    assert.equal(cutover.lifecycle, "normal");
+    assert.deepEqual(
+      await cutoverDistributedAcceptanceV3(
+        spec,
+        new ProcessDistributedExecutor(),
+      ),
+      cutover,
+    );
     assert.equal(
       readFileSync(join(betaRoot, "src", "value.ts"), "utf8"),
       "export const value = 'source';\n",
@@ -166,6 +185,57 @@ test("distributed setup previews, prepares, resumes, and applies one approved ta
       readFileSync(join(authorityRoot, "src", "value.ts"), "utf8"),
       "export const value = 'source';\n",
     );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("isolated preparation copies a witnessed master into a fresh sentinel root", async () => {
+  const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-isolated-"));
+  const runId = "isolated-integration-001";
+  const repetitionId = `${runId}-realistic-01`;
+  try {
+    const runRoot = join(base, "run");
+    mkdirSync(runRoot, { mode: 0o700 });
+    writeFileSync(join(runRoot, "SENTINEL"), `${runId}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    const master = join(base, "master", "Code");
+    createTree(master, "master");
+    const witness = await createTreeWitness(master);
+    const repetitionRoot = join(runRoot, repetitionId);
+    const workspace = join(repetitionRoot, "Code");
+    const request = {
+      action: "prepare",
+      machineId: "mattbook",
+      baseRunId: runId,
+      repetitionId,
+      baseRunRoot: runRoot,
+      repetitionRoot,
+      workspace,
+      masterRoot: master,
+      masterWitness: witness,
+      aiWorkspace: join(workspace, "codefoldersync-ai-workload"),
+    } as const;
+    const first = await runIsolatedAgent(request);
+    const resumed = await runIsolatedAgent(request);
+    assert.deepEqual(resumed, first);
+    assert.equal(
+      existsSync(
+        join(
+          workspace,
+          "codefoldersync-ai-workload",
+          "src",
+          "domains",
+          "domain-7",
+          "handler-7.ts",
+        ),
+      ),
+      true,
+    );
+    assert.deepEqual(await createTreeWitness(master), witness);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -257,6 +327,28 @@ test("AI workload records a large multi-directory mutation and replays it exactl
       flag: "wx",
     });
     const evidence = join(base, "private-evidence");
+    const visibility: VisibilityEvent[] = [];
+    const observerController = new AbortController();
+    let observerReady: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      observerReady = resolve;
+    });
+    const observer = runVisibilityObserver(
+      {
+        schemaVersion: 1,
+        runId,
+        allowedRunRoot: base,
+        workspace,
+        timeoutMs: 30_000,
+        pollIntervalMs: 10,
+      },
+      (event) => {
+        visibility.push(event);
+        if (event.kind === "ready") observerReady?.();
+      },
+      observerController.signal,
+    );
+    await ready;
     const result = await runAiWriter({
       runId,
       allowedRunRoot: base,
@@ -273,6 +365,43 @@ test("AI workload records a large multi-directory mutation and replays it exactl
     assert.ok(result.changedDirectories >= 8);
     assert.ok(result.createdFiles >= 2);
     assert.ok(result.deletedFiles >= 2);
+    const observationDeadline = Date.now() + 5_000;
+    while (
+      (!result.finalPathStates.every((expected) =>
+        visibility.some(
+          (event) =>
+            event.kind === "change" &&
+            event.pathHash === expected.pathHash &&
+            event.stateDigest === expected.stateDigest,
+        ),
+      ) ||
+        !visibility.some(
+          (event) =>
+            event.kind === "change" && event.treeDigest === result.finalDigest,
+        )) &&
+      Date.now() < observationDeadline
+    )
+      await delay(10);
+    observerController.abort();
+    await observer;
+    assert.equal(
+      result.finalPathStates.every((expected) =>
+        visibility.some(
+          (event) =>
+            event.kind === "change" &&
+            event.pathHash === expected.pathHash &&
+            event.stateDigest === expected.stateDigest,
+        ),
+      ),
+      true,
+    );
+    assert.equal(
+      visibility.some(
+        (event) =>
+          event.kind === "change" && event.treeDigest === result.finalDigest,
+      ),
+      true,
+    );
 
     const replay = join(base, "replay-workspace");
     createAiWorkloadFixture(replay);
@@ -492,5 +621,6 @@ function loseOneResponse(
       ),
     verify: (machine, config) =>
       after("verify", delegate.verify(machine, config)),
+    cutover: (machine, config) => delegate.cutover(machine, config),
   };
 }

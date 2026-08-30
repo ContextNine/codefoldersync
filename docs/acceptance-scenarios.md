@@ -62,17 +62,24 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - pseudo-fleet acceptance creates two fresh fleets with new roots, identities, hubs, and controller state;
 - both repetitions copy the same witnessed masters, apply the same deterministic 64-file cassette, and require exact final semantic digests;
 - the AI workload requires at least 50 changed TypeScript files across eight directories, verifies required create, move, and delete behavior, records a private cassette, and replays it to the same final digest.
+- isolated preparation verifies each master before and after its copy, requires a fresh remote repetition root, and creates the generated AI fixture before adoption;
+- the isolated controller verifies every directed SSH pair, runs the normal product setup and per-target approvals, signs cutover only inside the acceptance command, and projects the normal revision to every peer;
+- native launchd and systemd definitions install disabled in run-qualified directories, then start, restart, stop, and uninstall under a fresh folder ID;
+- long-lived source, hub, and target observers stream hashed state changes to one controller. Only that controller assigns accepted timing.
 
 The pseudo-fleet command accepts only an existing run root with a matching sentinel. It refuses an existing repetition directory and never cleans a prior run or a master:
 
 ```bash
 codefoldersync acceptance witness --root /absolute/master/Code
 codefoldersync acceptance pseudo-fleet --spec /private/pseudo-fleet.json --approve
+codefoldersync acceptance isolated-fleet --spec /private/isolated-fleet.json --approve
 ```
 
 Witness and committed result output contains aggregate counts, bytes, digests, timing, and pass state. Master paths and cassette contents remain in private run state.
 
-The live AI acceptance scenario uses an explicit model command in a generated non-secret TypeScript repository inside the run root. The runner sends a versioned prompt on standard input, observes mutations with one monotonic controller clock, validates the final repository, and stores file paths and content only in the private cassette. The external three-machine runner still has to measure hub and target visibility on Mattbook, Wootbook, and Worker Mac Air.
+The live AI acceptance scenario uses an explicit model command in a generated non-secret TypeScript repository inside the run root. The runner sends a versioned prompt on standard input, observes mutations with one monotonic controller clock, validates the final repository, and stores file paths and content only in the private cassette. It records model duration, first source change, final hub acceptance, per-target convergence, and path visibility p50, p95, and maximum. The second fresh repetition replays the first repetition's private cassette without invoking the model and requires the same final digest.
+
+The isolated specification names exactly three machines, stable SSH aliases, absolute run-qualified product commands, witnessed read-only masters, per-machine run roots, one hub target, and the AI command. Every base root must already contain an exact run sentinel. The controller refuses local endpoints, overlapping master and run roots, an existing unprepared repetition, a changed master, a mismatched product build, or an AI prompt other than the accepted prompt. It preserves test roots and private evidence. Service uninstall moves definitions into run-local recovery instead of deleting them.
 
 ## Required external V3 acceptance
 
@@ -81,7 +88,7 @@ Before daily-driver use, the plan still requires:
 1. verified encrypted backups of all three current Code roots;
 2. Wootbook immutable fixture masters and a restore drill;
 3. two executions of the full three-snapshot V3 pseudo-fleet lane with the remaining real fault matrix;
-4. two isolated real-machine runs on fresh sentinel roots;
+4. execution of the isolated runner on all three real machines, including its two fresh repetitions;
 5. a fresh daily-driver preview and explicit target-by-target apply approval;
 6. canary, restart, offline-edit, move, and conflict observation after cutover.
 

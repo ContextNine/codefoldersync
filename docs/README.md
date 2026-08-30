@@ -65,6 +65,10 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 | `src/v3/transport.ts`              | Local adapter and bounded framed SSH process                       |
 | `src/v3/engine.ts`                 | Seal, adoption, merge, apply, verify and recovery                  |
 | `src/v3/setup.ts`                  | Authority setup and target-local enrollment                        |
+| `src/v3/distributed.ts`            | Resumable multi-machine setup and per-target approval              |
+| `src/v3/acceptance.ts`             | Witnessed two-run real-snapshot pseudo-fleet execution             |
+| `src/v3/isolated.ts`               | Three-machine SSH, native service, replay, and timing execution    |
+| `src/v3/visibility.ts`             | Hashed AI path-state observation for controller-owned timing       |
 | `test/product.integration.test.ts` | Focused V3 end-to-end proof                                        |
 
 ## Vocabulary
@@ -80,4 +84,4 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 
 ## Current proof boundary
 
-Repository tests prove local process-isolated V3 behavior in fresh roots. The repository implementation does not claim that the plan's Google Drive backup, immutable real-snapshot fixtures, or real three-machine daily-driver adoption gates have run. Those remain external acceptance gates and may not be inferred from `pnpm check`.
+Repository tests prove local process-isolated V3 behavior in fresh roots. The repository now contains the executable pseudo-fleet and isolated three-machine runners, but a green build does not claim they ran against the protected masters or real fleet. Google Drive restore, real runner evidence, and daily-driver adoption remain external gates.

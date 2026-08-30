@@ -85,6 +85,16 @@ import {
   readPseudoFleetAcceptanceSpec,
   runPseudoFleetAcceptanceV3,
 } from "./v3/acceptance.js";
+import {
+  readVisibilityObserverSpec,
+  runVisibilityObserver,
+} from "./v3/visibility.js";
+import {
+  readIsolatedFleetAcceptanceSpec,
+  runHubVisibilityObserver,
+  runIsolatedAgent,
+  runIsolatedFleetAcceptanceV3,
+} from "./v3/isolated.js";
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -169,6 +179,15 @@ async function main(): Promise<void> {
       return;
     case "distributed-agent":
       printJson(await runDistributedAgent(await readJsonStdin()));
+      return;
+    case "visibility-agent":
+      await runVisibilityAgent();
+      return;
+    case "hub-visibility-agent":
+      await runHubVisibilityAgent();
+      return;
+    case "isolated-agent":
+      printJson(await runIsolatedAgent(await readJsonStdin()));
       return;
     case "acceptance":
       await runAcceptance(args);
@@ -739,7 +758,19 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     );
     return;
   }
-  throw new Error("Acceptance requires witness or pseudo-fleet");
+  if (action === "isolated-fleet") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Isolated-fleet acceptance requires explicit --approve");
+    printJson(
+      await runIsolatedFleetAcceptanceV3(
+        readIsolatedFleetAcceptanceSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
+  throw new Error(
+    "Acceptance requires witness, pseudo-fleet, or isolated-fleet",
+  );
 }
 
 function acquireDaemonLock(config: ProductConfig): () => void {
@@ -915,6 +946,42 @@ async function readJsonStdin(): Promise<unknown> {
   }
 }
 
+async function runVisibilityAgent(): Promise<void> {
+  const spec = readVisibilityObserverSpec(await readJsonStdin());
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  process.once("SIGINT", abort);
+  process.once("SIGTERM", abort);
+  try {
+    await runVisibilityObserver(
+      spec,
+      (event) => process.stdout.write(`${JSON.stringify(event)}\n`),
+      controller.signal,
+    );
+  } finally {
+    process.off("SIGINT", abort);
+    process.off("SIGTERM", abort);
+  }
+}
+
+async function runHubVisibilityAgent(): Promise<void> {
+  const spec = await readJsonStdin();
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  process.once("SIGINT", abort);
+  process.once("SIGTERM", abort);
+  try {
+    await runHubVisibilityObserver(
+      spec,
+      (event) => process.stdout.write(`${JSON.stringify(event)}\n`),
+      controller.signal,
+    );
+  } finally {
+    process.off("SIGINT", abort);
+    process.off("SIGTERM", abort);
+  }
+}
+
 function printHelp(): void {
   process.stdout.write(`CodeFolderSync ${productVersion}
 
@@ -943,6 +1010,7 @@ Commands:
   codefoldersync service <install|start|stop|restart|status|logs|uninstall>
   codefoldersync acceptance witness --root <path>
   codefoldersync acceptance pseudo-fleet --spec <path> --approve
+  codefoldersync acceptance isolated-fleet --spec <path> --approve
   codefoldersync gc --dry-run [--config <path>]
 `);
 }
