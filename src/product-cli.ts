@@ -649,8 +649,13 @@ async function runDaemon(commandArgs: readonly string[]): Promise<void> {
       if (!dirty && Date.now() - lastReconcile >= reconcileSeconds * 1000)
         dirty = true;
       if (!dirty) {
+        const probeGeneration = changeGeneration;
         try {
-          dirty = await hasRemoteChangesV3(config);
+          const remoteChanged = await hasRemoteChangesV3(config);
+          // A watcher event can arrive while an SSH checkpoint probe is in
+          // flight. Never let the older remote result erase that wakeup.
+          dirty =
+            dirty || remoteChanged || changeGeneration !== probeGeneration;
         } catch (error) {
           process.stderr.write(
             `hub offline: ${error instanceof Error ? error.message : String(error)}\n`,
