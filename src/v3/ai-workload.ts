@@ -399,9 +399,11 @@ export function aiWorkspaceDigest(
 ): string {
   return hashText(
     canonicalJson(
-      Object.entries(snapshotValue).sort(([left], [right]) =>
-        left.localeCompare(right),
-      ),
+      Object.entries(snapshotValue)
+        .map(
+          ([path, entry]) => [path, semanticAiWorkspaceEntry(entry)] as const,
+        )
+        .sort(([left], [right]) => left.localeCompare(right)),
     ),
   );
 }
@@ -413,8 +415,8 @@ export function changedAiWorkspacePaths(
   return [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter(
       (path) =>
-        canonicalJson(before[path] ?? null) !==
-        canonicalJson(after[path] ?? null),
+        canonicalJson(semanticAiWorkspaceEntry(before[path])) !==
+        canonicalJson(semanticAiWorkspaceEntry(after[path])),
     )
     .sort();
 }
@@ -432,7 +434,21 @@ function recordChanges(
 export function aiPathStateDigest(
   entry: AiWorkspaceEntry | undefined,
 ): string | null {
-  return entry === undefined ? null : hashText(canonicalJson(entry));
+  const semantic = semanticAiWorkspaceEntry(entry);
+  return semantic === null ? null : hashText(canonicalJson(semantic));
+}
+
+/** CodeFolderSync preserves executability, not platform-specific permission
+ * bits. Visibility evidence therefore compares bytes and the executable bit
+ * while the private cassette still retains the source mode for exact replay. */
+function semanticAiWorkspaceEntry(entry: AiWorkspaceEntry | undefined) {
+  return entry === undefined
+    ? null
+    : {
+        digest: entry.digest,
+        bytes: entry.bytes,
+        executable: (entry.mode & 0o111) !== 0,
+      };
 }
 
 function readCassette(path: string): MutationCassette {

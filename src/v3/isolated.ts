@@ -33,10 +33,12 @@ import {
   type TreeWitness,
 } from "./acceptance.js";
 import {
+  aiWorkspaceDigest,
   aiWorkloadPrompt,
   createAiWorkloadFixture,
   replayAiMutationCassette,
   runAiWriter,
+  type AiWorkspaceEntry,
   type AiWriterResult,
 } from "./ai-workload.js";
 import { scanNamespace } from "./catalog.js";
@@ -50,10 +52,10 @@ import {
 } from "./distributed.js";
 import { ProcessDistributedExecutor } from "./distributed-process.js";
 import { verifyFullV3 } from "./engine.js";
-import { ObjectStore } from "./objects.js";
+import { ObjectStore, parseManifest } from "./objects.js";
 import { LocalState } from "./state.js";
 import { HubTransport } from "./transport.js";
-import type { ServiceStatus, SyncSummary } from "./types.js";
+import type { NamespaceManifest, ServiceStatus, SyncSummary } from "./types.js";
 import type { VisibilityEvent, VisibilityObserverSpec } from "./visibility.js";
 
 export interface IsolatedMachineSpec {
@@ -106,6 +108,7 @@ interface HubVisibilityEvent {
   readonly kind: "ready" | "checkpoint" | "offline" | "timeout";
   readonly sequence: number | null;
   readonly snapshotDigest: string | null;
+  readonly workspaceDigest: string | null;
 }
 
 export interface IsolatedFleetRunResult {
@@ -235,6 +238,7 @@ export interface HubVisibilityObserverSpec {
   readonly repetitionId: string;
   readonly repetitionRoot: string;
   readonly configPath: string;
+  readonly workspace: string;
   readonly pollIntervalMs: number;
   readonly timeoutMs: number;
 }
@@ -307,20 +311,42 @@ export async function runHubVisibilityObserver(
 ): Promise<void> {
   const spec = hubVisibilitySpec(value);
   assertRunBoundary(spec.repetitionId, spec.repetitionRoot, spec.configPath);
+  assertRunBoundary(spec.repetitionId, spec.repetitionRoot, spec.workspace);
   const config = loadConfig(spec.configPath);
+  const localPeer = config.peers.find((peer) => peer.peerId === config.peerId);
+  if (localPeer?.role !== "hub")
+    throw new Error("Hub visibility must run on the enrolled hub peer");
+  assertRunBoundary(spec.repetitionId, spec.repetitionRoot, config.hub.path);
+  const workspace = resolve(spec.workspace);
+  const root = resolve(config.root);
+  if (!workspace.startsWith(`${root}${sep}`))
+    throw new Error("Hub visibility workspace escapes the synchronized root");
+  const workspaceRelative = workspace
+    .slice(root.length + 1)
+    .replaceAll(sep, "/");
   let lastSequence: number | null = null;
   const started = Date.now();
+  using hubObjects = new ObjectStore(join(config.hub.path, "objects"));
   while (!isAborted(signal) && Date.now() - started < spec.timeoutMs) {
     try {
       await using transport = await HubTransport.connectForPeer(config);
       while (!isAborted(signal) && Date.now() - started < spec.timeoutMs) {
         const checkpoint = await transport.checkpoint(config.folderId);
+        const workspaceDigest =
+          checkpoint.snapshot === null
+            ? null
+            : hubAiWorkspaceDigest(
+                checkpoint.snapshot,
+                hubObjects,
+                workspaceRelative,
+              );
         if (lastSequence === null) {
           lastSequence = checkpoint.sequence;
           emit({
             kind: "ready",
             sequence: checkpoint.sequence,
             snapshotDigest: checkpoint.snapshot?.digest ?? null,
+            workspaceDigest,
           });
         } else if (checkpoint.sequence !== lastSequence) {
           lastSequence = checkpoint.sequence;
@@ -328,6 +354,7 @@ export async function runHubVisibilityObserver(
             kind: "checkpoint",
             sequence: checkpoint.sequence,
             snapshotDigest: checkpoint.snapshot?.digest ?? null,
+            workspaceDigest,
           });
         }
         await new Promise<void>((resolvePromise) =>
@@ -335,14 +362,50 @@ export async function runHubVisibilityObserver(
         );
       }
     } catch {
-      emit({ kind: "offline", sequence: lastSequence, snapshotDigest: null });
+      emit({
+        kind: "offline",
+        sequence: lastSequence,
+        snapshotDigest: null,
+        workspaceDigest: null,
+      });
       await new Promise<void>((resolvePromise) =>
         setTimeout(resolvePromise, spec.pollIntervalMs),
       );
     }
   }
   if (!isAborted(signal))
-    emit({ kind: "timeout", sequence: lastSequence, snapshotDigest: null });
+    emit({
+      kind: "timeout",
+      sequence: lastSequence,
+      snapshotDigest: null,
+      workspaceDigest: null,
+    });
+}
+
+/** Derives the content oracle directly from an accepted hub snapshot. Node
+ * identities may be newly allocated at publication, so they cannot identify
+ * the final AI tree before the first accepted checkpoint exists. */
+export function hubAiWorkspaceDigest(
+  snapshot: NamespaceManifest,
+  objects: ObjectStore,
+  workspaceRelative: string,
+): string {
+  const prefix = `${workspaceRelative}/`;
+  const workspace: Record<string, AiWorkspaceEntry> = {};
+  for (const entry of snapshot.entries) {
+    if (!entry.path.startsWith(prefix) || entry.kind === "directory") continue;
+    if (entry.kind !== "regular" || entry.manifestId === null)
+      throw new Error("AI workspace hub snapshot contains a non-regular file");
+    const manifest = parseManifest(objects.get(entry.manifestId));
+    if (manifest.type !== "regular")
+      throw new Error("AI workspace hub object is not a regular manifest");
+    workspace[entry.path.slice(prefix.length)] = {
+      digest: manifest.digest,
+      bytes: manifest.bytes,
+      mode: manifest.executable ? 0o755 : 0o644,
+    };
+  }
+  return aiWorkspaceDigest(workspace);
 }
 
 export async function runIsolatedFleetAcceptanceV3(
@@ -451,6 +514,7 @@ export async function runIsolatedFleetAcceptanceV3(
           repetitionId,
           repetitionRoot: hubLayout.repetitionRoot,
           configPath: hubLayout.configPath,
+          workspace: hubLayout.aiWorkspace,
           pollIntervalMs: spec.observerPollIntervalMs,
           timeoutMs: spec.timeoutMs,
         } satisfies HubVisibilityObserverSpec,
@@ -512,14 +576,6 @@ export async function runIsolatedFleetAcceptanceV3(
         };
       }
       const writerCompletedMs = elapsed(controllerStarted);
-      const sourceSemantic = semanticResultValue(
-        await callIsolatedAgent(source, {
-          action: "semantic",
-          repetitionId,
-          repetitionRoot: sourceLayout.repetitionRoot,
-          configPath: sourceLayout.configPath,
-        }),
-      );
       const convergence = await waitForConvergence(
         spec,
         writer,
@@ -527,7 +583,6 @@ export async function runIsolatedFleetAcceptanceV3(
         targets.map((entry) => entry.machineId),
         workspaceObservers,
         hubObserver,
-        sourceSemantic.digest,
         writerStartedMs,
         writerCompletedMs,
       );
@@ -1182,7 +1237,6 @@ async function waitForConvergence(
   targetIds: readonly string[],
   observers: ReadonlyMap<string, JsonLineProcess<VisibilityEvent>>,
   hubObserver: JsonLineProcess<HubVisibilityEvent>,
-  expectedHubDigest: string,
   writerStartedMs: number,
   writerCompletedMs: number,
 ) {
@@ -1192,7 +1246,7 @@ async function waitForConvergence(
     spec.timeoutMs,
   );
   const hubAccepted = await hubObserver.waitFor(
-    (event) => event.snapshotDigest === expectedHubDigest,
+    (event) => event.workspaceDigest === writer.finalDigest,
     spec.timeoutMs,
   );
   const targetFinal = await Promise.all(
@@ -1608,6 +1662,7 @@ function hubVisibilitySpec(value: unknown): HubVisibilityObserverSpec {
   const spec = value as HubVisibilityObserverSpec;
   if (
     spec.schemaVersion !== 1 ||
+    !isAbsolute(spec.workspace) ||
     !Number.isInteger(spec.pollIntervalMs) ||
     spec.pollIntervalMs < 10 ||
     !Number.isInteger(spec.timeoutMs) ||

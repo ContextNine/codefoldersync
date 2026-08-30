@@ -23,9 +23,11 @@ import {
 } from "../src/v3/acceptance.js";
 import {
   aiWorkloadPrompt,
+  aiWorkspaceDigest,
   createAiWorkloadFixture,
   replayAiMutationCassette,
   runAiWriter,
+  snapshotAiWorkspace,
 } from "../src/v3/ai-workload.js";
 import type { DistributedFleetSpec } from "../src/v3/distributed.js";
 import {
@@ -41,9 +43,13 @@ import {
 } from "../src/v3/visibility.js";
 import {
   projectIsolatedFleetCapacityV3,
+  hubAiWorkspaceDigest,
   runIsolatedAgent,
   type IsolatedFleetAcceptanceSpec,
 } from "../src/v3/isolated.js";
+import { capturePath, ObjectStore } from "../src/v3/objects.js";
+import { semanticDigest } from "../src/v3/catalog.js";
+import type { CatalogEntry, NamespaceManifest } from "../src/v3/types.js";
 
 test("distributed setup previews, prepares, resumes, and applies one approved target at a time", async () => {
   const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-distributed-"));
@@ -1059,6 +1065,60 @@ test("AI workload records a large multi-directory mutation and replays it exactl
     });
     const workspace = join(base, "live-model-workspace");
     createAiWorkloadFixture(workspace);
+    const initialSnapshot = snapshotAiWorkspace(workspace);
+    const permissionVariant = Object.fromEntries(
+      Object.entries(initialSnapshot).map(([path, entry]) => [
+        path,
+        { ...entry, mode: entry.mode ^ 0o022 },
+      ]),
+    );
+    assert.equal(
+      aiWorkspaceDigest(permissionVariant),
+      aiWorkspaceDigest(initialSnapshot),
+    );
+
+    const hubObjects = new ObjectStore(join(base, "hub-oracle-objects"));
+    const packageCapture = capturePath(
+      join(workspace, "package.json"),
+      hubObjects,
+    );
+    assert.notEqual(packageCapture.manifestId, null);
+    const catalogEntry = (nodeId: string): CatalogEntry => ({
+      path: "fixture/package.json",
+      parentPath: "fixture",
+      parentNodeId: "fixture-node",
+      name: "package.json",
+      portableName: "package.json",
+      nodeId,
+      kind: "regular",
+      manifestId: packageCapture.manifestId,
+      executable: false,
+      device: 1,
+      inode: 1,
+      size: 1,
+      mtimeMs: 1,
+      ctimeMs: 1,
+    });
+    const manifest = (nodeId: string): NamespaceManifest => ({
+      schemaVersion: 3,
+      folderId: "test-folder",
+      ignoreDigest: "a".repeat(64),
+      entries: [catalogEntry(nodeId)],
+      gitBoundaries: [],
+      createdAt: "2026-08-30T00:00:00.000Z",
+      digest: "0".repeat(64),
+    });
+    const firstManifest = manifest("first-node");
+    const secondManifest = manifest("second-node");
+    assert.notEqual(
+      semanticDigest(firstManifest.entries, [], firstManifest.ignoreDigest),
+      semanticDigest(secondManifest.entries, [], secondManifest.ignoreDigest),
+    );
+    assert.equal(
+      hubAiWorkspaceDigest(firstManifest, hubObjects, "fixture"),
+      hubAiWorkspaceDigest(secondManifest, hubObjects, "fixture"),
+    );
+    hubObjects[Symbol.dispose]();
     const writer = join(base, "writer.mjs");
     writeFileSync(writer, deterministicAiWriterProgram(), {
       encoding: "utf8",
