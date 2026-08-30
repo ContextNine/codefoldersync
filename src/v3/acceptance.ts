@@ -92,11 +92,17 @@ export async function createTreeWitness(root: string): Promise<TreeWitness> {
   const rootStat = lstatSync(absoluteRoot);
   if (!rootStat.isDirectory())
     throw new Error("Witness root must be a directory");
-  const records: string[] = [];
+  const digest = createHash("sha256");
+  let entries = 0;
   let directories = 0;
   let files = 0;
   let symlinks = 0;
   let bytes = 0;
+  const appendRecord = (record: string): void => {
+    if (entries > 0) digest.update("\n");
+    digest.update(record);
+    entries += 1;
+  };
   const visit = async (directory: string): Promise<void> => {
     const entries = readdirSync(directory, { withFileTypes: true }).sort(
       (a, b) => Buffer.from(a.name).compare(Buffer.from(b.name)),
@@ -110,12 +116,12 @@ export async function createTreeWitness(root: string): Promise<TreeWitness> {
       const mode = stat.mode & 0o7777;
       if (stat.isDirectory()) {
         directories += 1;
-        records.push(canonicalJson([local, "directory", mode]));
+        appendRecord(canonicalJson([local, "directory", mode]));
         await visit(path);
       } else if (stat.isFile()) {
         files += 1;
         bytes += stat.size;
-        records.push(
+        appendRecord(
           canonicalJson([
             local,
             "regular",
@@ -126,7 +132,7 @@ export async function createTreeWitness(root: string): Promise<TreeWitness> {
         );
       } else if (stat.isSymbolicLink()) {
         symlinks += 1;
-        records.push(
+        appendRecord(
           canonicalJson([local, "symlink", mode, readlinkSync(path)]),
         );
       } else {
@@ -137,8 +143,8 @@ export async function createTreeWitness(root: string): Promise<TreeWitness> {
   await visit(absoluteRoot);
   return {
     schemaVersion: 1,
-    digest: hashText(records.join("\n")),
-    entries: records.length,
+    digest: digest.digest("hex"),
+    entries,
     directories,
     files,
     symlinks,

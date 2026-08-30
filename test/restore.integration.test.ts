@@ -18,8 +18,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import test from "node:test";
+import { canonicalJson, hashText } from "../src/v2/hash.js";
 import {
   createTreeWitness,
   makeTreeOwnerWritable,
@@ -114,6 +115,10 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
     assert.equal(result.witness.files, 4);
     assert.equal(result.witness.symlinks, 1);
     assert.equal(
+      result.witness.digest,
+      legacyTreeDigest(join(destination, "Code")),
+    );
+    assert.equal(
       readFileSync(
         join(destination, "Code", "packages", "app", "index.ts"),
         "utf8",
@@ -163,6 +168,42 @@ function makeDirectoriesWritable(path: string): void {
   chmodSync(path, stat.mode | 0o700);
   for (const entry of readdirSync(path))
     makeDirectoriesWritable(join(path, entry));
+}
+
+function legacyTreeDigest(root: string): string {
+  const absoluteRoot = resolve(root);
+  const records: string[] = [];
+  const visit = (directory: string): void => {
+    const entries = readdirSync(directory, { withFileTypes: true }).sort(
+      (left, right) => Buffer.from(left.name).compare(Buffer.from(right.name)),
+    );
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      const stat = lstatSync(path);
+      const local = relative(absoluteRoot, path).split(sep).join("/");
+      const mode = stat.mode & 0o7777;
+      if (stat.isDirectory()) {
+        records.push(canonicalJson([local, "directory", mode]));
+        visit(path);
+      } else if (stat.isFile()) {
+        records.push(
+          canonicalJson([
+            local,
+            "regular",
+            mode,
+            stat.size,
+            createHash("sha256").update(readFileSync(path)).digest("hex"),
+          ]),
+        );
+      } else if (stat.isSymbolicLink()) {
+        records.push(
+          canonicalJson([local, "symlink", mode, readlinkSync(path)]),
+        );
+      }
+    }
+  };
+  visit(absoluteRoot);
+  return hashText(records.join("\n"));
 }
 
 function run(
