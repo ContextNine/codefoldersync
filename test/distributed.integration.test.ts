@@ -17,6 +17,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import {
   createTreeWitness,
+  estimatePseudoFleetCapacityV3,
   runPseudoFleetAcceptanceV3,
   type PseudoFleetAcceptanceSpec,
 } from "../src/v3/acceptance.js";
@@ -902,6 +903,13 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
       hubMachineId: "wootbook",
       masters,
     };
+    const capacity = estimatePseudoFleetCapacityV3(spec);
+    assert.equal(capacity.passed, true);
+    assert.equal(capacity.objectStoreCopiesPerRepetition, 4);
+    assert.equal(
+      capacity.requiredBytes,
+      Math.ceil(capacity.projectedBytesPerRepetition * 2 * 1.25),
+    );
     const results = await runPseudoFleetAcceptanceV3(spec);
     assert.equal(results.length, 2);
     assert.equal(results[0]?.passed, true);

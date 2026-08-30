@@ -79,11 +79,14 @@ The pseudo-fleet command accepts only an existing run root with a matching senti
 ```bash
 codefoldersync acceptance witness --root /absolute/master/Code
 codefoldersync acceptance restore-master --spec /private/restore.json --approve
+codefoldersync acceptance pseudo-fleet-capacity --spec /private/pseudo-fleet.json
 codefoldersync acceptance pseudo-fleet --spec /private/pseudo-fleet.json --approve
 codefoldersync acceptance isolated-fleet --spec /private/isolated-fleet.json --approve
 ```
 
 Witness and committed result output contains aggregate counts, bytes, digests, timing, and pass state. Master paths and cassette contents remain in private run state.
+
+`pseudo-fleet-capacity` is a read-only preflight over the exact specification and sentinel root. It projects both preserved workspace copies, one content-addressed object store per peer plus the hub, target recovery, and a final 25 percent reserve from the accepted ignore contract. The mutating runner repeats this gate before it verifies or copies a master.
 
 `restore-master` accepts one flat ciphertext bundle, its source witness, declared source platform, and an age identity path from a private spec. It requires an exact destination sentinel, recomputes the complete ciphertext SHA-256 before decryption, creates the staging `payload` directory before streaming the archive into it so relative hard-link targets remain valid, rejects warnings or an archive without exactly one `Code` root, removes write permission, atomically places the master, and returns only ciphertext and aggregate tree witnesses. A Linux restore of a declared macOS archive does not request Linux ACL or xattr application and explicitly counts and ignores only BSD tar's `LIBARCHIVE.creationtime`, `LIBARCHIVE.xattr.*`, and `SCHILY.fflags` PAX records, because those platform metadata records cannot be applied to the Linux fixture master. Every other diagnostic remains fatal, and native macOS recovery must still prove the platform metadata separately. The command never contacts Drive, so a successful source-local restore does not satisfy the separate Drive-download gate.
 

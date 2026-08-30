@@ -26,6 +26,7 @@ import { ProcessDistributedExecutor } from "./distributed-process.js";
 import { cutoverAdoptionV3, syncFolderV3, verifyFullV3 } from "./engine.js";
 import { activatePeerV3, readEnrollmentRequest } from "./setup.js";
 import { ensureIgnore, loadConfig } from "./config.js";
+import { compileIgnore, defaultIgnore } from "./ignore.js";
 import { ObjectStore } from "./objects.js";
 import { LocalState } from "./state.js";
 import type { ProductConfig } from "./types.js";
@@ -77,6 +78,20 @@ export interface PseudoFleetRunResult {
   };
   readonly conflicts: number;
   readonly passed: true;
+}
+
+export interface PseudoFleetCapacityEstimate {
+  readonly schemaVersion: 1;
+  readonly repetitions: 2;
+  readonly workspaceBytesPerRepetition: number;
+  readonly includedBytesPerRepetition: number;
+  readonly targetRecoveryBytesPerRepetition: number;
+  readonly objectStoreCopiesPerRepetition: number;
+  readonly projectedBytesPerRepetition: number;
+  readonly requiredBytes: number;
+  readonly availableBytes: number;
+  readonly reserveFactor: 1.25;
+  readonly passed: boolean;
 }
 
 export function readPseudoFleetAcceptanceSpec(
@@ -171,6 +186,11 @@ export async function runPseudoFleetAcceptanceV3(
 ): Promise<readonly PseudoFleetRunResult[]> {
   validatePseudoFleetSpec(spec);
   assertSentinel(spec.runRoot, spec.runId);
+  const capacity = estimatePseudoFleetCapacityV3(spec);
+  if (!capacity.passed)
+    throw new Error(
+      `Pseudo-fleet lacks its two-run copy, object, recovery, and 25 percent reserve: required ${capacity.requiredBytes}, available ${capacity.availableBytes}`,
+    );
   for (const master of spec.masters) {
     const witness = await createTreeWitness(master.root);
     if (canonicalJson(witness) !== canonicalJson(master.witness))
@@ -185,6 +205,56 @@ export async function runPseudoFleetAcceptanceV3(
       throw new Error(`Master changed during acceptance: ${master.machineId}`);
   }
   return results;
+}
+
+export function estimatePseudoFleetCapacityV3(
+  spec: PseudoFleetAcceptanceSpec,
+): PseudoFleetCapacityEstimate {
+  validatePseudoFleetSpec(spec);
+  assertSentinel(spec.runRoot, spec.runId);
+  const workspaceBytesPerRepetition = spec.masters.reduce(
+    (total, master) => total + master.witness.bytes,
+    0,
+  );
+  const includedByMachine = new Map(
+    spec.masters.map((master) => [
+      master.machineId,
+      includedLogicalBytes(master.root),
+    ]),
+  );
+  const includedBytesPerRepetition = [...includedByMachine.values()].reduce(
+    (total, bytes) => total + bytes,
+    0,
+  );
+  const targetRecoveryBytesPerRepetition = spec.targetOrder.reduce(
+    (total, machineId) =>
+      total + requiredCapacity(includedByMachine, machineId),
+    0,
+  );
+  const objectStoreCopiesPerRepetition = spec.masters.length + 1;
+  const projectedBytesPerRepetition =
+    workspaceBytesPerRepetition +
+    includedBytesPerRepetition * objectStoreCopiesPerRepetition +
+    targetRecoveryBytesPerRepetition;
+  const reserveFactor = 1.25 as const;
+  const requiredBytes = Math.ceil(
+    projectedBytesPerRepetition * spec.repetitions * reserveFactor,
+  );
+  const filesystem = statfsSync(resolve(spec.runRoot));
+  const availableBytes = filesystem.bavail * filesystem.bsize;
+  return {
+    schemaVersion: 1,
+    repetitions: 2,
+    workspaceBytesPerRepetition,
+    includedBytesPerRepetition,
+    targetRecoveryBytesPerRepetition,
+    objectStoreCopiesPerRepetition,
+    projectedBytesPerRepetition,
+    requiredBytes,
+    availableBytes,
+    reserveFactor,
+    passed: availableBytes >= requiredBytes,
+  };
 }
 
 async function runPseudoFleetRepetition(
@@ -207,17 +277,6 @@ async function runPseudoFleetRepetition(
       flag: "wx",
     },
   );
-  const requiredBytes = Math.ceil(
-    spec.masters.reduce((total, master) => total + master.witness.bytes, 0) *
-      1.25,
-  );
-  const filesystem = statfsSync(repetitionRoot);
-  const availableBytes = filesystem.bavail * filesystem.bsize;
-  if (availableBytes < requiredBytes)
-    throw new Error(
-      "Acceptance run root lacks the required 25 percent reserve",
-    );
-
   const roots: Record<string, string> = {};
   for (const master of spec.masters) {
     const peerRoot = join(repetitionRoot, "peers", master.machineId, "Code");
@@ -380,6 +439,43 @@ function copyTree(source: string, destination: string): void {
   );
   if (result.status !== 0) throw new Error("Acceptance master copy failed");
   makeTreeOwnerWritable(destination);
+}
+
+function includedLogicalBytes(root: string): number {
+  const absoluteRoot = resolve(root);
+  const rootStat = lstatSync(absoluteRoot);
+  const ignorePath = join(absoluteRoot, ".codefoldersyncignore");
+  const ignore = compileIgnore(
+    existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : defaultIgnore,
+  );
+  let bytes = 0;
+  const visit = (directory: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const stat = lstatSync(path);
+      if (stat.dev !== rootStat.dev)
+        throw new Error("Pseudo-fleet capacity refuses a nested mount");
+      const local = relative(absoluteRoot, path).split(sep).join("/");
+      if (ignore.ignores(local, stat.isDirectory())) continue;
+      if (stat.isDirectory()) visit(path);
+      else if (stat.isFile()) bytes += stat.size;
+      else if (stat.isSymbolicLink())
+        bytes += Buffer.byteLength(readlinkSync(path), "utf8");
+      else throw new Error("Pseudo-fleet capacity found an unsupported object");
+    }
+  };
+  visit(absoluteRoot);
+  return bytes;
+}
+
+function requiredCapacity(
+  values: ReadonlyMap<string, number>,
+  machineId: string,
+): number {
+  const value = values.get(machineId);
+  if (value === undefined)
+    throw new Error(`Pseudo-fleet capacity is missing: ${machineId}`);
+  return value;
 }
 
 function assertSentinel(runRoot: string, runId: string): void {

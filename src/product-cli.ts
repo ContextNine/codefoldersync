@@ -87,6 +87,7 @@ import {
 import { watchIncludedNamespace } from "./v3/watcher.js";
 import {
   createTreeWitness,
+  estimatePseudoFleetCapacityV3,
   readPseudoFleetAcceptanceSpec,
   runPseudoFleetAcceptanceV3,
 } from "./v3/acceptance.js";
@@ -778,6 +779,14 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     );
     return;
   }
+  if (action === "pseudo-fleet-capacity") {
+    printJson(
+      estimatePseudoFleetCapacityV3(
+        readPseudoFleetAcceptanceSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
   if (action === "isolated-fleet") {
     if (!flag(commandArgs, "--approve"))
       throw new Error("Isolated-fleet acceptance requires explicit --approve");
@@ -799,7 +808,7 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     return;
   }
   throw new Error(
-    "Acceptance requires witness, restore-master, pseudo-fleet, or isolated-fleet",
+    "Acceptance requires witness, restore-master, pseudo-fleet-capacity, pseudo-fleet, or isolated-fleet",
   );
 }
 
@@ -1041,6 +1050,7 @@ Commands:
   codefoldersync service <install|start|stop|restart|status|logs|uninstall>
   codefoldersync acceptance witness --root <path>
   codefoldersync acceptance restore-master --spec <path> --approve
+  codefoldersync acceptance pseudo-fleet-capacity --spec <path>
   codefoldersync acceptance pseudo-fleet --spec <path> --approve
   codefoldersync acceptance isolated-fleet --spec <path> --approve
   codefoldersync gc --dry-run [--config <path>]
