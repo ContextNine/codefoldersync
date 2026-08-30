@@ -1089,7 +1089,7 @@ async function stopServicesBestEffort(
   layouts: ReadonlyMap<string, MachineLayout>,
 ): Promise<void> {
   for (const entry of spec.machines) {
-    await serviceCall(spec, entry, repetitionId, layouts, "stop").catch(
+    await serviceCall(spec, entry, repetitionId, layouts, "uninstall").catch(
       () => undefined,
     );
   }
