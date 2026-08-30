@@ -28,6 +28,7 @@ import { canonicalJson } from "../v2/hash.js";
 import { shellQuote } from "../executor.js";
 import {
   createTreeWitness,
+  includedLogicalBytes,
   makeTreeOwnerWritable,
   type TreeWitness,
 } from "./acceptance.js";
@@ -133,6 +134,31 @@ export interface IsolatedFleetRunResult {
   readonly passed: true;
 }
 
+export interface IsolatedMachineCapacityObservation {
+  readonly schemaVersion: 1;
+  readonly machineId: string;
+  readonly workspaceBytesPerRepetition: number;
+  readonly includedBytesPerRepetition: number;
+  readonly availableBytes: number;
+}
+
+export interface IsolatedMachineCapacityEstimate extends IsolatedMachineCapacityObservation {
+  readonly localObjectStoreBytesPerRepetition: number;
+  readonly hubObjectStoreBytesPerRepetition: number;
+  readonly recoveryBytesPerRepetition: number;
+  readonly projectedBytesPerRepetition: number;
+  readonly requiredBytes: number;
+  readonly reserveFactor: 1.25;
+  readonly passed: boolean;
+}
+
+export interface IsolatedFleetCapacityEstimate {
+  readonly schemaVersion: 1;
+  readonly repetitions: 2;
+  readonly machines: readonly IsolatedMachineCapacityEstimate[];
+  readonly passed: boolean;
+}
+
 type IsolatedAgentRequest =
   | {
       readonly action: "ssh-matrix";
@@ -155,6 +181,14 @@ type IsolatedAgentRequest =
       readonly masterRoot: string;
       readonly masterWitness: TreeWitness;
       readonly aiWorkspace: string;
+    }
+  | {
+      readonly action: "capacity";
+      readonly machineId: string;
+      readonly baseRunId: string;
+      readonly baseRunRoot: string;
+      readonly masterRoot: string;
+      readonly masterWitness: TreeWitness;
     }
   | {
       readonly action: "ai-writer";
@@ -218,6 +252,8 @@ export async function runIsolatedAgent(request: unknown): Promise<unknown> {
       return verifyRemoteSshPeers(input);
     case "prepare":
       return prepareMachine(input);
+    case "capacity":
+      return measureIsolatedMachineCapacity(input);
     case "ai-writer":
       assertRunBoundary(
         input.repetitionId,
@@ -310,9 +346,19 @@ export async function runHubVisibilityObserver(
 export async function runIsolatedFleetAcceptanceV3(
   spec: IsolatedFleetAcceptanceSpec,
 ): Promise<readonly IsolatedFleetRunResult[]> {
-  validateIsolatedSpec(spec);
-  assertExactSentinel(spec.controllerStateDir, spec.runId);
-  await verifySshMatrix(spec);
+  const capacity = await estimateIsolatedFleetCapacityV3(spec);
+  if (!capacity.passed) {
+    const failures = capacity.machines
+      .filter((entry) => !entry.passed)
+      .map(
+        (entry) =>
+          `${entry.machineId} requires ${entry.requiredBytes} bytes and has ${entry.availableBytes}`,
+      )
+      .join("; ");
+    throw new Error(
+      `Isolated fleet lacks its two-run copy, object, recovery, and 25 percent reserve: ${failures}`,
+    );
+  }
   const source = machine(spec, spec.sourceMachineId);
   const hub = machine(spec, spec.hubMachineId);
   const targets = spec.targetOrder.map((machineId) => machine(spec, machineId));
@@ -527,6 +573,141 @@ export async function runIsolatedFleetAcceptanceV3(
   if (results[0]?.finalDigest !== results[1]?.finalDigest)
     throw new Error("AI replay final digest differs from the real model run");
   return results;
+}
+
+export async function estimateIsolatedFleetCapacityV3(
+  spec: IsolatedFleetAcceptanceSpec,
+): Promise<IsolatedFleetCapacityEstimate> {
+  validateIsolatedSpec(spec);
+  assertExactSentinel(spec.controllerStateDir, spec.runId);
+  await verifySshMatrix(spec);
+  const observations = await Promise.all(
+    spec.machines.map(async (entry) =>
+      isolatedMachineCapacityObservation(
+        await callIsolatedAgent(entry, {
+          action: "capacity",
+          machineId: entry.machineId,
+          baseRunId: spec.runId,
+          baseRunRoot: entry.runRoot,
+          masterRoot: entry.masterRoot,
+          masterWitness: entry.masterWitness,
+        }),
+      ),
+    ),
+  );
+  return projectIsolatedFleetCapacityV3(spec, observations);
+}
+
+export function projectIsolatedFleetCapacityV3(
+  spec: IsolatedFleetAcceptanceSpec,
+  observations: readonly IsolatedMachineCapacityObservation[],
+): IsolatedFleetCapacityEstimate {
+  const byMachine = new Map(
+    observations.map((entry) => [entry.machineId, entry]),
+  );
+  if (
+    observations.length !== spec.machines.length ||
+    byMachine.size !== spec.machines.length ||
+    spec.machines.some((entry) => !byMachine.has(entry.machineId))
+  )
+    throw new Error("Isolated capacity observations do not match the fleet");
+  const sourceIncluded = requiredCapacityObservation(
+    byMachine,
+    spec.sourceMachineId,
+  ).includedBytesPerRepetition;
+  const totalIncluded = observations.reduce(
+    (total, entry) => total + entry.includedBytesPerRepetition,
+    0,
+  );
+  const reserveFactor = 1.25 as const;
+  const machines = spec.machines.map((machineSpec) => {
+    const observation = requiredCapacityObservation(
+      byMachine,
+      machineSpec.machineId,
+    );
+    const target = spec.targetOrder.includes(machineSpec.machineId);
+    const localObjectStoreBytesPerRepetition =
+      sourceIncluded + (target ? observation.includedBytesPerRepetition : 0);
+    const hubObjectStoreBytesPerRepetition =
+      machineSpec.machineId === spec.hubMachineId ? totalIncluded : 0;
+    const recoveryBytesPerRepetition = target
+      ? observation.includedBytesPerRepetition
+      : 0;
+    const projectedBytesPerRepetition =
+      observation.workspaceBytesPerRepetition +
+      localObjectStoreBytesPerRepetition +
+      hubObjectStoreBytesPerRepetition +
+      recoveryBytesPerRepetition;
+    const requiredBytes = Math.ceil(
+      projectedBytesPerRepetition * spec.repetitions * reserveFactor,
+    );
+    return {
+      ...observation,
+      localObjectStoreBytesPerRepetition,
+      hubObjectStoreBytesPerRepetition,
+      recoveryBytesPerRepetition,
+      projectedBytesPerRepetition,
+      requiredBytes,
+      reserveFactor,
+      passed: observation.availableBytes >= requiredBytes,
+    } satisfies IsolatedMachineCapacityEstimate;
+  });
+  return {
+    schemaVersion: 1,
+    repetitions: 2,
+    machines,
+    passed: machines.every((entry) => entry.passed),
+  };
+}
+
+async function measureIsolatedMachineCapacity(
+  input: Extract<IsolatedAgentRequest, { readonly action: "capacity" }>,
+): Promise<IsolatedMachineCapacityObservation> {
+  assertExactSentinel(input.baseRunRoot, input.baseRunId);
+  const masterWitness = await createTreeWitness(input.masterRoot);
+  if (canonicalJson(masterWitness) !== canonicalJson(input.masterWitness))
+    throw new Error(
+      "Isolated master witness changed before capacity preflight",
+    );
+  const filesystem = statfsSync(resolve(input.baseRunRoot));
+  return {
+    schemaVersion: 1,
+    machineId: input.machineId,
+    workspaceBytesPerRepetition: masterWitness.bytes,
+    includedBytesPerRepetition: includedLogicalBytes(input.masterRoot),
+    availableBytes: filesystem.bavail * filesystem.bsize,
+  };
+}
+
+function isolatedMachineCapacityObservation(
+  value: unknown,
+): IsolatedMachineCapacityObservation {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("Isolated capacity agent returned an invalid result");
+  const observation = value as Partial<IsolatedMachineCapacityObservation>;
+  if (
+    observation.schemaVersion !== 1 ||
+    typeof observation.machineId !== "string" ||
+    !isCapacityByteCount(observation.workspaceBytesPerRepetition) ||
+    !isCapacityByteCount(observation.includedBytesPerRepetition) ||
+    !isCapacityByteCount(observation.availableBytes)
+  )
+    throw new Error("Isolated capacity agent returned an invalid result");
+  return observation as IsolatedMachineCapacityObservation;
+}
+
+function isCapacityByteCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function requiredCapacityObservation(
+  observations: ReadonlyMap<string, IsolatedMachineCapacityObservation>,
+  machineId: string,
+): IsolatedMachineCapacityObservation {
+  const observation = observations.get(machineId);
+  if (observation === undefined)
+    throw new Error(`Isolated capacity is missing: ${machineId}`);
+  return observation;
 }
 
 async function prepareMachine(
@@ -1377,6 +1558,7 @@ function isolatedAgentRequest(value: unknown): IsolatedAgentRequest {
     action !== "ssh-matrix" &&
     action !== "ai-writer" &&
     action !== "ai-replay" &&
+    action !== "capacity" &&
     action !== "service" &&
     action !== "semantic" &&
     action !== "verify"

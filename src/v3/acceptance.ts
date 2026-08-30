@@ -441,7 +441,7 @@ function copyTree(source: string, destination: string): void {
   makeTreeOwnerWritable(destination);
 }
 
-function includedLogicalBytes(root: string): number {
+export function includedLogicalBytes(root: string): number {
   const absoluteRoot = resolve(root);
   const rootStat = lstatSync(absoluteRoot);
   const ignorePath = join(absoluteRoot, ".codefoldersyncignore");
@@ -454,14 +454,14 @@ function includedLogicalBytes(root: string): number {
       const path = join(directory, entry.name);
       const stat = lstatSync(path);
       if (stat.dev !== rootStat.dev)
-        throw new Error("Pseudo-fleet capacity refuses a nested mount");
+        throw new Error("Acceptance capacity refuses a nested mount");
       const local = relative(absoluteRoot, path).split(sep).join("/");
       if (ignore.ignores(local, stat.isDirectory())) continue;
       if (stat.isDirectory()) visit(path);
       else if (stat.isFile()) bytes += stat.size;
       else if (stat.isSymbolicLink())
         bytes += Buffer.byteLength(readlinkSync(path), "utf8");
-      else throw new Error("Pseudo-fleet capacity found an unsupported object");
+      else throw new Error("Acceptance capacity found an unsupported object");
     }
   };
   visit(absoluteRoot);

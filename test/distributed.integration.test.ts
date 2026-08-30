@@ -39,7 +39,11 @@ import {
   runVisibilityObserver,
   type VisibilityEvent,
 } from "../src/v3/visibility.js";
-import { runIsolatedAgent } from "../src/v3/isolated.js";
+import {
+  projectIsolatedFleetCapacityV3,
+  runIsolatedAgent,
+  type IsolatedFleetAcceptanceSpec,
+} from "../src/v3/isolated.js";
 
 test("distributed setup previews, prepares, resumes, and applies one approved target at a time", async () => {
   const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-distributed-"));
@@ -223,6 +227,93 @@ test("isolated preparation copies a witnessed master into a fresh sentinel root"
       masterWitness: witness,
       aiWorkspace: join(workspace, "codefoldersync-ai-workload"),
     } as const;
+    const observedCapacity = (await runIsolatedAgent({
+      action: "capacity",
+      machineId: "mattbook",
+      baseRunId: runId,
+      baseRunRoot: runRoot,
+      masterRoot: master,
+      masterWitness: witness,
+    })) as {
+      readonly workspaceBytesPerRepetition: number;
+      readonly includedBytesPerRepetition: number;
+      readonly availableBytes: number;
+    };
+    assert.equal(observedCapacity.workspaceBytesPerRepetition, witness.bytes);
+    assert.ok(observedCapacity.includedBytesPerRepetition > 0);
+    assert.ok(observedCapacity.availableBytes > 0);
+
+    const machine = (
+      machineId: string,
+    ): IsolatedFleetAcceptanceSpec["machines"][number] => ({
+      machineId,
+      peerName: machineId,
+      endpoint: { kind: "local" },
+      command: [process.execPath],
+      runRoot,
+      masterRoot: master,
+      masterWitness: witness,
+    });
+    const capacitySpec: IsolatedFleetAcceptanceSpec = {
+      schemaVersion: 1,
+      runId,
+      scenarioId: "capacity",
+      repetitions: 2,
+      expectedVersion: "0.3.0",
+      expectedReleaseSha256: "e".repeat(64),
+      backupWitness: "capacity-test",
+      controllerStateDir: runRoot,
+      sourceMachineId: "mattbook",
+      targetOrder: ["wootbook", "workermacair"],
+      hubMachineId: "wootbook",
+      machines: [
+        machine("mattbook"),
+        machine("wootbook"),
+        machine("workermacair"),
+      ],
+      aiWorkspaceName: "codefoldersync-ai-workload",
+      aiWriterCommand: [process.execPath],
+      aiModelId: "capacity-test",
+      aiPrompt: aiWorkloadPrompt,
+      observerPollIntervalMs: 25,
+      timeoutMs: 30_000,
+    };
+    const projected = projectIsolatedFleetCapacityV3(capacitySpec, [
+      {
+        schemaVersion: 1,
+        machineId: "mattbook",
+        workspaceBytesPerRepetition: 100,
+        includedBytesPerRepetition: 80,
+        availableBytes: 450,
+      },
+      {
+        schemaVersion: 1,
+        machineId: "wootbook",
+        workspaceBytesPerRepetition: 200,
+        includedBytesPerRepetition: 150,
+        availableBytes: 2_149,
+      },
+      {
+        schemaVersion: 1,
+        machineId: "workermacair",
+        workspaceBytesPerRepetition: 70,
+        includedBytesPerRepetition: 50,
+        availableBytes: 625,
+      },
+    ]);
+    assert.deepEqual(
+      projected.machines.map((entry) => [
+        entry.machineId,
+        entry.requiredBytes,
+        entry.passed,
+      ]),
+      [
+        ["mattbook", 450, true],
+        ["wootbook", 2_150, false],
+        ["workermacair", 625, true],
+      ],
+    );
+    assert.equal(projected.passed, false);
     const first = await runIsolatedAgent(request);
     const resumed = await runIsolatedAgent(request);
     assert.deepEqual(resumed, first);

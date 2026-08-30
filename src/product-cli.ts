@@ -96,6 +96,7 @@ import {
   runVisibilityObserver,
 } from "./v3/visibility.js";
 import {
+  estimateIsolatedFleetCapacityV3,
   readIsolatedFleetAcceptanceSpec,
   runHubVisibilityObserver,
   runIsolatedAgent,
@@ -797,6 +798,14 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     );
     return;
   }
+  if (action === "isolated-fleet-capacity") {
+    printJson(
+      await estimateIsolatedFleetCapacityV3(
+        readIsolatedFleetAcceptanceSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
   if (action === "restore-master") {
     if (!flag(commandArgs, "--approve"))
       throw new Error("Encrypted master restore requires explicit --approve");
@@ -808,7 +817,7 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     return;
   }
   throw new Error(
-    "Acceptance requires witness, restore-master, pseudo-fleet-capacity, pseudo-fleet, or isolated-fleet",
+    "Acceptance requires witness, restore-master, pseudo-fleet-capacity, pseudo-fleet, isolated-fleet-capacity, or isolated-fleet",
   );
 }
 
@@ -1052,6 +1061,7 @@ Commands:
   codefoldersync acceptance restore-master --spec <path> --approve
   codefoldersync acceptance pseudo-fleet-capacity --spec <path>
   codefoldersync acceptance pseudo-fleet --spec <path> --approve
+  codefoldersync acceptance isolated-fleet-capacity --spec <path>
   codefoldersync acceptance isolated-fleet --spec <path> --approve
   codefoldersync gc --dry-run [--config <path>]
 `);
