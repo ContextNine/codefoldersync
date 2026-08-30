@@ -560,7 +560,19 @@ scenario(
             peerName: "hub-peer",
             role: "hub",
           });
-          const accepted = enrollPeer(authority, request);
+          const firstAccepted = enrollPeer(authority, request);
+          const samePathRequest = createPeerEnrollmentRequest({
+            folderId: authority.folderId,
+            root: request.peer.root,
+            stateDir: join(base, "same-path-peer", "state"),
+            peerName: "same-path-on-another-machine",
+          });
+          const accepted = enrollPeer(firstAccepted, samePathRequest);
+          assert.equal(
+            accepted.peers.filter((peer) => peer.root === request.peer.root)
+              .length,
+            2,
+          );
           using hub = new HubStore(hubPath);
           hub.createFolder(accepted);
           const projected = activatePeerProjection(

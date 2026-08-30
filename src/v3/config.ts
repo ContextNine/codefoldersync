@@ -165,8 +165,7 @@ export function enrollPeer(
     config.peers.some(
       (peer) =>
         peer.peerId === request.peer.peerId ||
-        peer.peerName === request.peer.peerName ||
-        peer.root === request.peer.root,
+        peer.peerName === request.peer.peerName,
     )
   )
     throw new Error("Peer enrollment conflicts with an existing peer");

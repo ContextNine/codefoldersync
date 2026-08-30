@@ -34,6 +34,8 @@ Each peer keeps its accepted baseline. A local-only change publishes a signed ch
 
 The fleet signs one SSH hub route. The enrolled hub-role peer opens that route's absolute data path locally, while every other peer uses strict SSH. Fleet access intentionally has no self-SSH alias, so the hub role is the only signed local transport exception.
 
+Peer IDs and peer names are fleet-unique. Absolute roots are machine-local and may match across machines, as they normally do on two Macs with the same home and Code layout.
+
 Before network I/O the event and object closure enter the durable outbox. Unknown outcomes retry the exact serialized event. A stale CAS is rebased only after its stable proposal remains represented by the live tree.
 
 ## Ownership handoff
