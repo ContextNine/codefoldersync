@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -1118,6 +1119,12 @@ test("AI workload records a large multi-directory mutation and replays it exactl
       hubAiWorkspaceDigest(firstManifest, hubObjects, "fixture"),
       hubAiWorkspaceDigest(secondManifest, hubObjects, "fixture"),
     );
+    assert.equal(
+      hubAiWorkspaceDigest(firstManifest, hubObjects, "fixture"),
+      aiWorkspaceDigest({
+        "package.json": initialSnapshot["package.json"]!,
+      }),
+    );
     hubObjects[Symbol.dispose]();
     const writer = join(base, "writer.mjs");
     writeFileSync(writer, deterministicAiWriterProgram(), {
@@ -1148,6 +1155,11 @@ test("AI workload records a large multi-directory mutation and replays it exactl
       observerController.signal,
     );
     await ready;
+    const displacedWorkspace = `${workspace}.atomic-replacement`;
+    renameSync(workspace, displacedWorkspace);
+    await delay(50);
+    renameSync(displacedWorkspace, workspace);
+    await delay(50);
     const result = await runAiWriter({
       runId,
       allowedRunRoot: base,

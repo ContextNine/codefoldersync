@@ -24,7 +24,7 @@ import {
   uninstallService,
   type ServiceOptions,
 } from "../v2/service.js";
-import { canonicalJson } from "../v2/hash.js";
+import { canonicalJson, hashBytes, hashText } from "../v2/hash.js";
 import { shellQuote } from "../executor.js";
 import {
   createTreeWitness,
@@ -399,8 +399,21 @@ export function hubAiWorkspaceDigest(
     const manifest = parseManifest(objects.get(entry.manifestId));
     if (manifest.type !== "regular")
       throw new Error("AI workspace hub object is not a regular manifest");
+    const content = Buffer.concat(
+      manifest.chunks.map((chunk) => {
+        const bytes = objects.get(chunk.id);
+        if (bytes.length !== chunk.bytes)
+          throw new Error("AI workspace hub chunk length is invalid");
+        return bytes;
+      }),
+    );
+    if (
+      content.length !== manifest.bytes ||
+      hashBytes(content) !== manifest.digest
+    )
+      throw new Error("AI workspace hub content is invalid");
     workspace[entry.path.slice(prefix.length)] = {
-      digest: manifest.digest,
+      digest: hashText(content.toString("base64")),
       bytes: manifest.bytes,
       mode: manifest.executable ? 0o755 : 0o644,
     };

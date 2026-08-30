@@ -58,7 +58,15 @@ export async function runVisibilityObserver(
       () => undefined,
     );
     if (isAborted(signal)) return;
-    const current = snapshotAiWorkspace(spec.workspace);
+    let current: ReturnType<typeof snapshotAiWorkspace>;
+    try {
+      current = snapshotAiWorkspace(spec.workspace);
+    } catch (error) {
+      // Snapshot application briefly moves the accepted workspace out of the
+      // way. Keep the previous observation and retry the stable path.
+      if (isTransientReplacement(error)) continue;
+      throw error;
+    }
     const treeDigest = aiWorkspaceDigest(current);
     for (const path of changedAiWorkspacePaths(previous, current)) {
       sequence += 1;
@@ -78,6 +86,15 @@ export async function runVisibilityObserver(
       sequence,
       treeDigest: aiWorkspaceDigest(previous),
     });
+}
+
+function isTransientReplacement(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
 }
 
 function isAborted(signal: AbortSignal | undefined): boolean {
