@@ -182,6 +182,7 @@ type IsolatedAgentRequest =
       readonly masterRoot: string;
       readonly masterWitness: TreeWitness;
       readonly aiWorkspace: string;
+      readonly createAiWorkspace: boolean;
     }
   | {
       readonly action: "capacity";
@@ -391,6 +392,7 @@ export async function runIsolatedFleetAcceptanceV3(
           masterRoot: entry.masterRoot,
           masterWitness: entry.masterWitness,
           aiWorkspace: layout.aiWorkspace,
+          createAiWorkspace: entry.machineId === spec.sourceMachineId,
         });
       }),
     );
@@ -764,7 +766,7 @@ async function prepareMachine(
   makeTreeOwnerWritable(input.workspace);
   if (existsSync(input.aiWorkspace))
     throw new Error("AI fixture path already exists in the copied master");
-  createAiWorkloadFixture(input.aiWorkspace);
+  if (input.createAiWorkspace) createAiWorkloadFixture(input.aiWorkspace);
   const masterAfter = await createTreeWitness(input.masterRoot);
   if (canonicalJson(masterAfter) !== canonicalJson(input.masterWitness))
     throw new Error("Isolated master witness changed during copy");
@@ -1075,6 +1077,7 @@ async function verifyPreparedMasters(
         masterRoot: entry.masterRoot,
         masterWitness: entry.masterWitness,
         aiWorkspace: layout.aiWorkspace,
+        createAiWorkspace: entry.machineId === spec.sourceMachineId,
       });
     }),
   );

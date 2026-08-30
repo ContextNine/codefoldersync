@@ -68,7 +68,7 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - the Linux mount lane runs the installed product in a networkless, read-only container with a real nested tmpfs and requires source seal to stop before hub publication;
 - the large-snapshot lane scans 4,096 TypeScript files and proves a no-change pass uploads zero objects;
 - an unreadable Linux subtree stops source seal before the hub accepts a sequence;
-- isolated preparation verifies each master before and after its copy, requires a fresh remote repetition root, and creates the generated AI fixture before adoption;
+- isolated preparation verifies each master before and after its copy, requires a fresh remote repetition root, and creates the generated AI fixture only on the source so both populated targets receive it through adoption;
 - the isolated controller invokes the hub machine locally, verifies strict SSH over every directed pair of distinct machines, runs the normal product setup and per-target approvals, signs cutover only inside the acceptance command, and projects the normal revision to every peer;
 - native launchd and systemd definitions install disabled in run-qualified directories, then start, restart, stop, and uninstall under a fresh folder ID;
 - the Linux systemd lane edits while stopped and requires the next start's full reconciliation to publish the missed change;

@@ -226,6 +226,7 @@ test("isolated preparation copies a witnessed master into a fresh sentinel root"
       masterRoot: master,
       masterWitness: witness,
       aiWorkspace: join(workspace, "codefoldersync-ai-workload"),
+      createAiWorkspace: true,
     } as const;
     const observedCapacity = (await runIsolatedAgent({
       action: "capacity",
@@ -332,6 +333,23 @@ test("isolated preparation copies a witnessed master into a fresh sentinel root"
       true,
     );
     assert.deepEqual(await createTreeWitness(master), witness);
+
+    const targetRepetitionId = `${runId}-target-01`;
+    const targetRepetitionRoot = join(runRoot, targetRepetitionId);
+    const targetWorkspace = join(targetRepetitionRoot, "Code");
+    await runIsolatedAgent({
+      ...request,
+      machineId: "workermacair",
+      repetitionId: targetRepetitionId,
+      repetitionRoot: targetRepetitionRoot,
+      workspace: targetWorkspace,
+      aiWorkspace: join(targetWorkspace, "codefoldersync-ai-workload"),
+      createAiWorkspace: false,
+    });
+    assert.equal(
+      existsSync(join(targetWorkspace, "codefoldersync-ai-workload")),
+      false,
+    );
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
