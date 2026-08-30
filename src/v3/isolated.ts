@@ -1116,10 +1116,20 @@ async function stopAndUninstallServices(
 ): Promise<Readonly<Record<string, "stopped-and-uninstalled">>> {
   const result: Record<string, "stopped-and-uninstalled"> = {};
   for (const entry of spec.machines) {
-    const stopped = serviceStatusResult(
+    let stopped = serviceStatusResult(
       await serviceCall(spec, entry, repetitionId, layouts, "stop"),
     );
-    if (stopped.running) throw new Error("Isolated service did not stop");
+    const deadline = Date.now() + 10_000;
+    while (stopped.running && Date.now() < deadline) {
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 50),
+      );
+      stopped = serviceStatusResult(
+        await serviceCall(spec, entry, repetitionId, layouts, "status"),
+      );
+    }
+    if (stopped.running)
+      throw new Error(`Isolated service did not stop: ${entry.machineId}`);
     await serviceCall(spec, entry, repetitionId, layouts, "uninstall");
     result[entry.machineId] = "stopped-and-uninstalled";
   }
