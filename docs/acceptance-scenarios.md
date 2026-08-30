@@ -62,9 +62,13 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - pseudo-fleet acceptance creates two fresh fleets with new roots, identities, hubs, and controller state;
 - both repetitions copy the same witnessed masters, apply the same deterministic 64-file cassette, and require exact final semantic digests;
 - the AI workload requires at least 50 changed TypeScript files across eight directories, verifies required create, move, and delete behavior, records a private cassette, and replays it to the same final digest.
+- the Linux durability lane injects real `ENOSPC` write and `EIO` fsync results below materialization staging, requires an inconclusive result with retained prior bytes, then retries to clean full verification;
+- the large-snapshot lane scans 4,096 TypeScript files and proves a no-change pass uploads zero objects;
+- an unreadable Linux subtree stops source seal before the hub accepts a sequence;
 - isolated preparation verifies each master before and after its copy, requires a fresh remote repetition root, and creates the generated AI fixture before adoption;
 - the isolated controller verifies every directed SSH pair, runs the normal product setup and per-target approvals, signs cutover only inside the acceptance command, and projects the normal revision to every peer;
 - native launchd and systemd definitions install disabled in run-qualified directories, then start, restart, stop, and uninstall under a fresh folder ID;
+- the Linux systemd lane edits while stopped and requires the next start's full reconciliation to publish the missed change;
 - long-lived source, hub, and target observers stream hashed state changes to one controller. Only that controller assigns accepted timing.
 
 The pseudo-fleet command accepts only an existing run root with a matching sentinel. It refuses an existing repetition directory and never cleans a prior run or a master:

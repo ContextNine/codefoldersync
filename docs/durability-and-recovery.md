@@ -47,6 +47,8 @@ Startup validates that both paths remain within the root or state directory. If 
 
 New materialization happens in same-filesystem staging, verifies its manifest, and renames into place. Git staging additionally runs `git fsck --full` before and after swap. Restart accepts only a live tree composed of the recorded pre-apply and desired states; an unrelated edit stops recovery without overwriting it. Source seal and cutover likewise retain durable intent across upload, unknown acknowledgement, hub acceptance, and local projection boundaries. Authority creation, peer enrollment, and peer configuration projection have their own exact journals so an interruption before or after hub/config acknowledgement resumes without generating a second folder or peer identity.
 
+The Linux acceptance test uses a native preload shim so production `write` and `fsync` calls receive `ENOSPC` and `EIO` from the operating-system boundary. Both failures leave the sync inconclusive, keep the previous bytes under `apply-recovery`, and retain partial staging outside the live root. A clean retry must converge and pass full verification without removing the recovery copy.
+
 ## Baseline recovery
 
 The owner-only baseline snapshot and catalog observations are rebuildable from the live tree plus hub checkpoint. Losing catalog rows may reduce rename inference but does not remove content. Losing the baseline requires conservative remote reconciliation rather than guessing concurrency.

@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -487,6 +488,130 @@ test("large recursive snapshot has a zero-upload no-change pass", () => {
     rmSync(base, { recursive: true, force: true });
   }
 });
+
+test(
+  "real Linux write and fsync failures retain recovery state and resume cleanly",
+  {
+    skip:
+      platform() !== "linux" ||
+      spawnSync("cc", ["--version"], { stdio: "ignore" }).status !== 0,
+  },
+  async () => {
+    const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-fs-fault-"));
+    const releaseSha256 = "3".repeat(64);
+    try {
+      const binary = installBinary(base, releaseSha256);
+      const preload = join(base, "filesystem-fault.so");
+      const compiled = spawnSync(
+        "cc",
+        [
+          "-shared",
+          "-fPIC",
+          "-O2",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-o",
+          preload,
+          join(process.cwd(), "test", "fixtures", "filesystem-fault.c"),
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(compiled.status, 0, compiled.stderr);
+
+      for (const fault of ["enospc-write", "eio-fsync"] as const) {
+        const spec = createOneTargetSpec(
+          base,
+          `real-${fault}`,
+          binary,
+          releaseSha256,
+        );
+        const executor = new ProcessDistributedExecutor();
+        const prepared = await prepareDistributedSetupV3(spec, executor);
+        const adoptionId = prepared.targets[0]?.adoptionId;
+        assert.ok(adoptionId);
+        await applyDistributedTargetV3(spec, executor, "target", adoptionId);
+        await cutoverDistributedAcceptanceV3(spec, executor);
+
+        const authorityValue = join(spec.authority.root, "src", "value.ts");
+        const targetValue = join(spec.targets[0]!.root, "src", "value.ts");
+        const expected = `export const value = '${fault} recovered';\n`;
+        writeFileSync(authorityValue, expected, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+        const authoritySync = spawnSync(
+          binary,
+          ["sync", "--config", spec.authority.configPath],
+          { encoding: "utf8" },
+        );
+        assert.equal(authoritySync.status, 0, authoritySync.stderr);
+
+        const failed = spawnSync(
+          binary,
+          ["sync", "--config", spec.targets[0]!.configPath],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              LD_PRELOAD: preload,
+              CODEFOLDERSYNC_TEST_FS_FAULT: fault,
+              CODEFOLDERSYNC_TEST_FS_MATCH: join(
+                spec.targets[0]!.stateDir,
+                "staging",
+              ),
+            },
+          },
+        );
+        assert.equal(failed.status, 1, failed.stderr);
+        const failure = JSON.parse(failed.stdout) as {
+          readonly status: string;
+          readonly reasons: readonly string[];
+        };
+        assert.equal(failure.status, "inconclusive");
+        assert.match(
+          failure.reasons.join("\n"),
+          fault === "enospc-write"
+            ? /ENOSPC|no space left/iu
+            : /EIO|I\/O error|input\/output error/iu,
+        );
+        if (existsSync(targetValue))
+          assert.notEqual(readFileSync(targetValue, "utf8"), expected);
+        const recoveryRoot = join(spec.targets[0]!.stateDir, "apply-recovery");
+        const recoveredValue = readdirSync(recoveryRoot, {
+          recursive: true,
+          encoding: "utf8",
+        }).find((path) => path.endsWith(join("src", "value.ts")));
+        assert.ok(recoveredValue);
+        assert.equal(
+          readFileSync(join(recoveryRoot, recoveredValue), "utf8"),
+          "export const value = 'source';\n",
+        );
+
+        const resumed = spawnSync(
+          binary,
+          ["sync", "--config", spec.targets[0]!.configPath],
+          { encoding: "utf8" },
+        );
+        assert.equal(resumed.status, 0, resumed.stderr);
+        assert.equal(readFileSync(targetValue, "utf8"), expected);
+        const verified = spawnSync(
+          binary,
+          ["verify", "--full", "--config", spec.targets[0]!.configPath],
+          { encoding: "utf8" },
+        );
+        assert.equal(verified.status, 0, verified.stderr);
+        assert.equal(JSON.parse(verified.stdout).status, "clean");
+        assert.equal(
+          readFileSync(join(recoveryRoot, recoveredValue), "utf8"),
+          "export const value = 'source';\n",
+        );
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  },
+);
 
 test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one deterministic cassette", async () => {
   const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-pseudo-fleet-"));
