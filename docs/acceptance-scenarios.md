@@ -52,13 +52,35 @@ The suite proves:
 
 The repository retains older sentinel-protected safety and churn harnesses. They remain useful for general loss detection, process supervision, and service confinement, but their V2 product workflow is not V3 fleet acceptance.
 
+## Reproducible V3 fleet runners
+
+`test/distributed.integration.test.ts` proves the executable foundations for external acceptance:
+
+- distributed setup runs through process-isolated product commands and requires the same recorded release SHA-256 everywhere;
+- preparation stops before target mutation and each target apply requires its exact adoption ID;
+- every remote mutation boundary resumes after the operation completed but its response was lost;
+- pseudo-fleet acceptance creates two fresh fleets with new roots, identities, hubs, and controller state;
+- both repetitions copy the same witnessed masters, apply the same deterministic 64-file cassette, and require exact final semantic digests;
+- the AI workload requires at least 50 changed TypeScript files across eight directories, verifies required create, move, and delete behavior, records a private cassette, and replays it to the same final digest.
+
+The pseudo-fleet command accepts only an existing run root with a matching sentinel. It refuses an existing repetition directory and never cleans a prior run or a master:
+
+```bash
+codefoldersync acceptance witness --root /absolute/master/Code
+codefoldersync acceptance pseudo-fleet --spec /private/pseudo-fleet.json --approve
+```
+
+Witness and committed result output contains aggregate counts, bytes, digests, timing, and pass state. Master paths and cassette contents remain in private run state.
+
+The live AI acceptance scenario uses an explicit model command in a generated non-secret TypeScript repository inside the run root. The runner sends a versioned prompt on standard input, observes mutations with one monotonic controller clock, validates the final repository, and stores file paths and content only in the private cassette. The external three-machine runner still has to measure hub and target visibility on Mattbook, Wootbook, and Worker Mac Air.
+
 ## Required external V3 acceptance
 
 Before daily-driver use, the plan still requires:
 
 1. verified encrypted backups of all three current Code roots;
 2. Wootbook immutable fixture masters and a restore drill;
-3. a full three-snapshot V3 pseudo-fleet lane with failure injection;
+3. two executions of the full three-snapshot V3 pseudo-fleet lane with the remaining real fault matrix;
 4. two isolated real-machine runs on fresh sentinel roots;
 5. a fresh daily-driver preview and explicit target-by-target apply approval;
 6. canary, restart, offline-edit, move, and conflict observation after cutover.

@@ -43,9 +43,17 @@ def verify(args: argparse.Namespace) -> tuple[bool, list[str]]:
     if not binary.is_file():
         errors.append(f"command is missing: {binary}")
     else:
-        result = subprocess.run([str(binary), "--version"], text=True, capture_output=True, check=False)
-        if result.returncode or result.stdout.strip() != f"codefoldersync {VERSION}":
-            errors.append(f"command is not CodeFolderSync {VERSION}")
+        result = subprocess.run([str(binary), "--version", "--json"], text=True, capture_output=True, check=False)
+        try:
+            identity = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            identity = {}
+        if (
+            result.returncode
+            or identity.get("version") != VERSION
+            or identity.get("releaseSha256") != args.release_sha256
+        ):
+            errors.append(f"command is not the accepted CodeFolderSync {VERSION} release")
     return not errors, errors
 
 
@@ -54,6 +62,7 @@ def emit(args: argparse.Namespace, ready: bool, changed: bool, errors: list[str]
     report = {
         "component": "codefoldersync",
         "version": VERSION,
+        "release_sha256": args.release_sha256,
         "ready": ready,
         "changed": changed,
         "command": str(binary),
@@ -69,6 +78,7 @@ def main() -> int:
     parser.add_argument("--version", action="version", version=VERSION)
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--release-sha256", required=True)
     parser.add_argument("--install-root", type=Path, default=Path.home() / ".local/lib/codefoldersync")
     parser.add_argument("--bin-dir", type=Path, default=Path.home() / ".local/bin")
     args = parser.parse_args()
@@ -93,6 +103,8 @@ def main() -> int:
             str(args.install_root.expanduser().resolve()),
             "--bin-dir",
             str(args.bin_dir.expanduser().resolve()),
+            "--release-sha256",
+            args.release_sha256,
         ]
         result = subprocess.run(command, text=True, capture_output=True, check=False)
         if result.returncode:

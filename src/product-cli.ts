@@ -56,6 +56,16 @@ import {
   setupPopulatedFleetV3,
 } from "./v3/orchestrator.js";
 import {
+  applyDistributedTargetV3,
+  prepareDistributedSetupV3,
+  previewDistributedSetupV3,
+  readDistributedFleetSpec,
+} from "./v3/distributed.js";
+import {
+  ProcessDistributedExecutor,
+  runDistributedAgent,
+} from "./v3/distributed-process.js";
+import {
   activatePeerV3,
   enrollPeerV3,
   preparePeerEnrollment,
@@ -69,6 +79,12 @@ import {
   schemaVersion,
   type ProductConfig,
 } from "./v3/types.js";
+import { installedReleaseIdentity } from "./v3/release.js";
+import {
+  createTreeWitness,
+  readPseudoFleetAcceptanceSpec,
+  runPseudoFleetAcceptanceV3,
+} from "./v3/acceptance.js";
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -90,7 +106,18 @@ async function main(): Promise<void> {
       return;
     case "version":
     case "--version":
-      process.stdout.write(`codefoldersync ${productVersion}\n`);
+      if (flag(args, "--json")) {
+        const release = installedReleaseIdentity();
+        printJson({
+          component: "codefoldersync",
+          version: productVersion,
+          schemaVersion,
+          protocolVersion,
+          releaseSha256: release?.archiveSha256 ?? null,
+        });
+      } else {
+        process.stdout.write(`codefoldersync ${productVersion}\n`);
+      }
       return;
     case "install":
     case "upgrade":
@@ -140,6 +167,12 @@ async function main(): Promise<void> {
     case "hub":
       await runHub(args);
       return;
+    case "distributed-agent":
+      printJson(await runDistributedAgent(await readJsonStdin()));
+      return;
+    case "acceptance":
+      await runAcceptance(args);
+      return;
     case "gc":
       runGc(args);
       return;
@@ -154,11 +187,13 @@ function runInstall(commandArgs: readonly string[]): void {
   );
   const installRoot = option(commandArgs, "--install-root");
   const binaryDirectory = option(commandArgs, "--bin-dir");
+  const releaseSha256 = option(commandArgs, "--release-sha256");
   printJson({
     installed: true,
     version: productVersion,
     ...installSelf({
       builtDirectory: built,
+      ...(releaseSha256 === undefined ? {} : { releaseSha256 }),
       ...(installRoot === undefined ? {} : { installRoot }),
       ...(binaryDirectory === undefined ? {} : { binaryDirectory }),
     }),
@@ -253,6 +288,29 @@ async function runSetup(commandArgs: readonly string[]): Promise<void> {
     });
     return;
   }
+  if (mode === "distributed") {
+    const spec = readDistributedFleetSpec(
+      requiredOption(commandArgs, "--spec"),
+    );
+    const executor = new ProcessDistributedExecutor();
+    const approvePrepare = flag(commandArgs, "--approve-prepare");
+    const target = option(commandArgs, "--approve-target");
+    if (approvePrepare && target !== undefined)
+      throw new Error("Distributed setup accepts one approval step at a time");
+    if (approvePrepare) {
+      printJson(await prepareDistributedSetupV3(spec, executor));
+      return;
+    }
+    if (target !== undefined) {
+      const adoptionId = requiredOption(commandArgs, "--adoption-id");
+      printJson(
+        await applyDistributedTargetV3(spec, executor, target, adoptionId),
+      );
+      return;
+    }
+    printJson(await previewDistributedSetupV3(spec, executor));
+    return;
+  }
   if (mode === "request") {
     const accepted = loadConfig(
       requiredOption(commandArgs, "--accepted-config"),
@@ -324,7 +382,7 @@ async function runSetup(commandArgs: readonly string[]): Promise<void> {
     return;
   }
   throw new Error(
-    "Setup mode must be fleet, authority, request, enroll, or activate",
+    "Setup mode must be distributed, fleet, authority, request, enroll, or activate",
   );
 }
 
@@ -665,6 +723,25 @@ function runGc(commandArgs: readonly string[]): void {
   });
 }
 
+async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
+  const action = positional(commandArgs, 0);
+  if (action === "witness") {
+    printJson(await createTreeWitness(requiredOption(commandArgs, "--root")));
+    return;
+  }
+  if (action === "pseudo-fleet") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Pseudo-fleet acceptance requires explicit --approve");
+    printJson(
+      await runPseudoFleetAcceptanceV3(
+        readPseudoFleetAcceptanceSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
+  throw new Error("Acceptance requires witness or pseudo-fleet");
+}
+
 function acquireDaemonLock(config: ProductConfig): () => void {
   const path = join(config.stateDir, "daemon.lock");
   try {
@@ -790,6 +867,8 @@ function positional(
     "--hub-base64",
     "--previous-ignore",
     "--spec",
+    "--release-sha256",
+    "--approve-target",
   ]);
   const values: string[] = [];
   for (let cursor = 0; cursor < args.length; cursor += 1) {
@@ -819,6 +898,23 @@ function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+async function readJsonStdin(): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > 64 * 1024 * 1024)
+      throw new Error("Distributed agent request exceeds 64 MiB");
+    chunks.push(buffer);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } catch {
+    throw new Error("Distributed agent request is not valid JSON");
+  }
+}
+
 function printHelp(): void {
   process.stdout.write(`CodeFolderSync ${productVersion}
 
@@ -827,6 +923,9 @@ Recursive Code-folder synchronization with source-authoritative adoption.
 Commands:
   codefoldersync setup
   codefoldersync setup --mode fleet --spec <path> --approve
+  codefoldersync setup --mode distributed --spec <path>
+  codefoldersync setup --mode distributed --spec <path> --approve-prepare
+  codefoldersync setup --mode distributed --spec <path> --approve-target <machine-id> --adoption-id <id>
   codefoldersync setup --mode authority --root <path> --hub <path|ssh-url> --backup-witness <id>
   codefoldersync setup --mode request --accepted-config <path> --root <path> --state <path> --request <path>
   codefoldersync setup --mode enroll --config <authority-config> --request <path>
@@ -842,6 +941,8 @@ Commands:
   codefoldersync recover <conflict-id> --to <absent-path>
   codefoldersync promote-conflict <conflict-id> [--to <relative-absent-path>]
   codefoldersync service <install|start|stop|restart|status|logs|uninstall>
+  codefoldersync acceptance witness --root <path>
+  codefoldersync acceptance pseudo-fleet --spec <path> --approve
   codefoldersync gc --dry-run [--config <path>]
 `);
 }

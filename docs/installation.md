@@ -16,11 +16,12 @@ No account or hosted CodeFolderSync service exists.
 corepack pnpm install
 pnpm check
 pnpm build
-node dist/product-cli.js install
+node dist/product-cli.js install --release-sha256 <accepted-release-sha256>
 ~/.local/bin/codefoldersync --version
+~/.local/bin/codefoldersync --version --json
 ```
 
-The installer copies `dist/` to `~/.local/lib/codefoldersync/0.3.0/` and atomically activates `~/.local/bin/codefoldersync`. Rollback only changes the wrapper to a retained version; it does not convert V3 config, state, or hub data.
+The installer copies `dist/` to `~/.local/lib/codefoldersync/0.3.0/`, records the accepted archive SHA-256 beside the installed build, and atomically activates `~/.local/bin/codefoldersync`. Distributed setup rejects a missing or different release digest. Rollback only changes the wrapper to a retained version; it does not convert V3 config, state, or hub data.
 
 ## Setup sequence
 
@@ -39,7 +40,9 @@ The exact flags are documented in the CodeFolderSync README and `codefoldersync 
 
 `codefoldersync setup` is the interactive form for a controller with access to the authority and populated target roots. It prompts for the folder, hub, backup witness, authority, targets, state/config/request paths, and final source-authoritative adoption approval. `codefoldersync setup --mode fleet --spec <json> --approve` is its exact scriptable equivalent. Both perform enrollment, final projection, source seal, target plan/apply/verification, and return cutover readiness while leaving every service disabled. They require an explicit backup witness and approval and do not sign the cutover barrier.
 
-The repository controller can operate only on roots visible to its process. Real multi-machine use still requires the separately verified topology, exact build, SSH, credentials, backups, and per-machine execution described by the operational acceptance plan.
+The local fleet controller can operate only on roots visible to its process. For isolated machines, `setup --mode distributed --spec <json>` runs the same product operations through strict noninteractive SSH. A no-approval run verifies the exact version and recorded release digest without mutation. `--approve-prepare` creates and resumes authority, enrollment, projections, source seal, and target plans, then stops. `--approve-target <machine-id> --adoption-id <id>` applies and verifies one target. It never signs cutover or starts services.
+
+The distributed journal lives outside every synchronized root. It records only public signed configuration, public enrollment requests, plan state, and sanitized outcomes. Private keys stay in each machine's state directory. Retries after lost responses reuse the same identity, accepted revision, and preselected adoption ID.
 
 ## Filesystem probe
 

@@ -20,20 +20,23 @@ pnpm build
 
 Keep `test/product.integration.test.ts` at ten tests or fewer. Prefer a complete setup-to-hub-to-adoption-to-apply case over unit tests of private helper shapes or wording.
 
-| Change                   | Required evidence                                             |
-| ------------------------ | ------------------------------------------------------------- |
-| Recursive scan or ignore | Deep paths, hard exclusions, aliases, unsupported objects     |
-| Manifest/object          | Exact round trip, digest rejection, bounded transfer          |
-| Authority/enrollment     | Target-local key, signed revision, tamper rejection           |
-| Adoption                 | Populated target recovery, source zero mutation, force verify |
-| Normal merge             | Causal concurrent edits and visible exact conflict            |
-| Directory identity       | Deep rename and zero object upload                            |
-| Rename transaction       | File/directory cycles plus case and Unicode spelling changes  |
-| Git boundary             | Nested capture/apply/fsck and external-dir rejection          |
-| Protocol                 | Local/SSH parity, version mismatch, frame and object bounds   |
-| Durability               | Injected source seal, apply, adoption, and cutover restarts   |
-| Integrity                | Corrupt hub object rejected before live mutation              |
-| Service                  | Explicit test paths, disabled before cutover, exact uninstall |
+| Change                   | Required evidence                                                         |
+| ------------------------ | ------------------------------------------------------------------------- |
+| Recursive scan or ignore | Deep paths, hard exclusions, aliases, unsupported objects                 |
+| Manifest/object          | Exact round trip, digest rejection, bounded transfer                      |
+| Authority/enrollment     | Target-local key, signed revision, tamper rejection                       |
+| Adoption                 | Populated target recovery, source zero mutation, force verify             |
+| Normal merge             | Causal concurrent edits and visible exact conflict                        |
+| Directory identity       | Deep rename and zero object upload                                        |
+| Rename transaction       | File/directory cycles plus case and Unicode spelling changes              |
+| Git boundary             | Nested capture/apply/fsck and external-dir rejection                      |
+| Protocol                 | Local/SSH parity, version mismatch, frame and object bounds               |
+| Durability               | Injected source seal, apply, adoption, and cutover restarts               |
+| Integrity                | Corrupt hub object rejected before live mutation                          |
+| Service                  | Explicit test paths, disabled before cutover, exact uninstall             |
+| Distributed setup        | Exact release, lost response at every remote step, per-target approval    |
+| Real-snapshot acceptance | Two fresh witnessed copies, deterministic cassette, exact convergence     |
+| AI coding workload       | Real model command, 50 files, eight directories, verified replay, timings |
 
 ## Safe roots
 

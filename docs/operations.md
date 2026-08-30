@@ -70,3 +70,5 @@ Before cutover, CTX9 workspace reconciliation remains authoritative for managed 
 ## External acceptance boundary
 
 Repository commands do not authenticate Rclone, create Google Drive backups, create Wootbook masters, or authorize daily-driver adoption. Those steps belong to the gated fleet plan and must be evidenced separately.
+
+`acceptance witness` and `acceptance pseudo-fleet` operate only on explicitly named fixture and sentinel roots. They do not discover or default to `~/Code`. The pseudo-fleet runner verifies masters before and after both fresh repetitions, preserves every run directory, and stops on insufficient capacity or a changed witness. Cleanup remains a separate exact-path operation.

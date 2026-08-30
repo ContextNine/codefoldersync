@@ -202,6 +202,7 @@ export async function sealSourceV3(
 
 export async function planAdoptionV3(
   config: ProductConfig,
+  options: { readonly adoptionId?: string } = {},
 ): Promise<AdoptionPlan> {
   verifyConfig(config);
   if (config.lifecycle !== "adoption")
@@ -225,9 +226,25 @@ export async function planAdoptionV3(
   const summaryCounts = emptyAdoptionSummary();
   for (const difference of differences)
     summaryCounts[difference.classification] += 1;
+  const adoptionId = options.adoptionId ?? randomUUID();
+  if (!/^[a-f0-9-]{36}$/iu.test(adoptionId))
+    throw new Error("Adoption ID is invalid");
+  const path = adoptionPlanPath(config, adoptionId);
+  if (existsSync(path)) {
+    const existing = loadAdoptionPlan(config, adoptionId);
+    if (
+      existing.folderId !== config.folderId ||
+      existing.targetPeerId !== config.peerId ||
+      existing.sourceSequence !== checkpoint.sequence ||
+      existing.sourceDigest !== checkpoint.snapshot.digest ||
+      existing.targetDigest !== target.manifest.digest
+    )
+      throw new Error("Existing adoption plan does not match current state");
+    return existing;
+  }
   const plan: AdoptionPlan = {
     schemaVersion,
-    adoptionId: randomUUID(),
+    adoptionId,
     folderId: config.folderId,
     sourceSequence: checkpoint.sequence,
     sourceDigest: checkpoint.snapshot.digest,
@@ -238,7 +255,6 @@ export async function planAdoptionV3(
     differences,
     summary: summaryCounts,
   };
-  const path = adoptionPlanPath(config, plan.adoptionId);
   writeEncryptedPlan(config, path, plan);
   return plan;
 }

@@ -22,8 +22,9 @@ V3 is incompatible with V1 and V2. It uses schema and protocol version 3, a fres
 CodeFolderSync requires Node.js 22 or newer. Download the release archive and checksum from [GitHub Releases](https://github.com/MDerman/codefoldersync/releases), verify them, extract the archive, then run:
 
 ```bash
-python3 codefoldersync-0.3.0/scripts/install.py
+python3 codefoldersync-0.3.0/scripts/install.py --release-sha256 <archive-sha256>
 codefoldersync --version
+codefoldersync --version --json
 ```
 
 The release installer is idempotent and supports `--verify --json`. It installs a versioned build under `~/.local/lib/codefoldersync` and activates `~/.local/bin/codefoldersync` without requiring a repository checkout.
@@ -34,7 +35,7 @@ Git is required for synchronized Git boundaries, and SSH is required for a remot
 corepack pnpm install
 pnpm check
 pnpm build
-node dist/product-cli.js install
+node dist/product-cli.js install --release-sha256 <accepted-release-sha256>
 ~/.local/bin/codefoldersync --version
 ```
 
@@ -77,6 +78,16 @@ codefoldersync setup --mode fleet --spec /path/to/fleet-setup.json --approve
 ```
 
 The JSON spec names the folder, verified backup witness, local or SSH hub, authority root/state/config, and each target root/state/config/request path. Interactive and scriptable setup create target-local keys, enroll and project the final signed adoption revision, seal the source, adopt each populated target, force-verify them, and stop with services disabled. They never perform cutover. Remote machines must first have the exact build, verified SSH route, credentials, and roots made available by the external fleet ceremony.
+
+For isolated machines, the distributed controller verifies the exact recorded release on every endpoint and previews without mutation:
+
+```bash
+codefoldersync setup --mode distributed --spec /path/to/distributed.json
+codefoldersync setup --mode distributed --spec /path/to/distributed.json --approve-prepare
+codefoldersync setup --mode distributed --spec /path/to/distributed.json --approve-target wootbook --adoption-id <id>
+```
+
+Preparation journals authority creation, target-local enrollment, accepted projections, source seal, and deterministic adoption-plan IDs. It stops before target mutation. Each target apply needs its own machine ID and exact adoption ID. A lost response resumes the same operation instead of creating another identity or plan.
 
 ## Enroll populated targets
 

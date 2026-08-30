@@ -31,6 +31,7 @@ export interface ServiceOptions {
 
 export function installSelf(input: {
   readonly builtDirectory: string;
+  readonly releaseSha256?: string;
   readonly installRoot?: string;
   readonly binaryDirectory?: string;
 }): { readonly executable: string; readonly versionDirectory: string } {
@@ -49,6 +50,23 @@ export function installSelf(input: {
     errorOnExist: true,
     force: false,
   });
+  if (input.releaseSha256 !== undefined) {
+    if (!/^[a-f0-9]{64}$/u.test(input.releaseSha256))
+      throw new Error("Release SHA-256 is invalid");
+    writeFileSync(
+      join(versionDirectory, "release.json"),
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          version: productVersion,
+          archiveSha256: input.releaseSha256,
+        },
+        null,
+        2,
+      )}\n`,
+      { encoding: "utf8", mode: 0o444, flag: "wx" },
+    );
+  }
   mkdirSync(binaryDirectory, { recursive: true, mode: 0o755 });
   const executable = join(binaryDirectory, "codefoldersync");
   const temporary = `${executable}.tmp-${randomUUID()}`;

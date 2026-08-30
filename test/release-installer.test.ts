@@ -11,6 +11,8 @@ test("release installer is idempotent and verifies exact version", () => {
   const bin = join(root, "bin");
   const command = [
     "scripts/install.py",
+    "--release-sha256",
+    "a".repeat(64),
     "--install-root",
     installRoot,
     "--bin-dir",

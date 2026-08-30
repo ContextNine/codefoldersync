@@ -13,7 +13,18 @@ export function runOnPeer(
   const remoteCommand = [command, ...args].map(shellQuote).join(" ");
   return runCommand(
     "ssh",
-    ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", peer.host, remoteCommand],
+    [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "ConnectTimeout=8",
+      peer.host,
+      remoteCommand,
+    ],
     { allowFailure },
   );
 }
@@ -30,7 +41,18 @@ export async function runOnPeerAsync(
   const remoteCommand = [command, ...args].map(shellQuote).join(" ");
   return await runCommandAsync(
     "ssh",
-    ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", peer.host, remoteCommand],
+    [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "ConnectTimeout=8",
+      peer.host,
+      remoteCommand,
+    ],
     { allowFailure },
   );
 }
