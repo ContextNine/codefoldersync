@@ -428,6 +428,66 @@ test(
   },
 );
 
+test(
+  "a real nested tmpfs mount blocks sealing inside an isolated mount namespace",
+  {
+    skip:
+      platform() !== "linux" ||
+      spawnSync("docker", ["info"], { stdio: "ignore" }).status !== 0,
+  },
+  (context) => {
+    const image =
+      process.env.CODEFOLDERSYNC_TEST_NODE_IMAGE ?? "summit-crm:local";
+    const inspected = spawnSync(
+      "docker",
+      ["image", "inspect", "--format={{.Id}}", image],
+      { encoding: "utf8" },
+    );
+    if (inspected.status !== 0) {
+      context.skip(`local Node test image is unavailable: ${image}`);
+      return;
+    }
+    const imageId = inspected.stdout.trim();
+    assert.match(imageId, /^sha256:[a-f0-9]{64}$/u);
+    const mounted = spawnSync(
+      "docker",
+      [
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--cap-add",
+        "SYS_ADMIN",
+        "--cap-add",
+        "DAC_OVERRIDE",
+        "--security-opt",
+        "apparmor=unconfined",
+        "--tmpfs",
+        "/work:rw,nosuid,nodev,size=64m",
+        "--mount",
+        `type=bind,source=${join(process.cwd(), "dist")},target=/release,readonly`,
+        "--mount",
+        `type=bind,source=${join(process.cwd(), "test", "fixtures", "mount-rejection.mjs")},target=/mount-rejection.mjs,readonly`,
+        "--entrypoint",
+        "node",
+        imageId,
+        "/mount-rejection.mjs",
+        "/release/product-cli.js",
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    assert.equal(mounted.status, 0, mounted.stderr || mounted.error?.message);
+    assert.deepEqual(JSON.parse(mounted.stdout), {
+      rejected: true,
+      hubSequence: 0,
+      mountType: "tmpfs",
+    });
+  },
+);
+
 test("large recursive snapshot has a zero-upload no-change pass", () => {
   const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-large-"));
   const releaseSha256 = "2".repeat(64);

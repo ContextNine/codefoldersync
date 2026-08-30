@@ -64,6 +64,7 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - the AI workload requires at least 50 changed TypeScript files across eight directories, verifies required create, move, and delete behavior, records a private cassette, and replays it to the same final digest;
 - the Linux durability lane injects real `ENOSPC` write and `EIO` fsync results below materialization staging, requires an inconclusive result with retained prior bytes, then retries to clean full verification;
 - the Linux watcher lane freezes the daemon, proves `IN_Q_OVERFLOW` with a separate native watcher, writes the included marker after saturation, and requires the scheduled full scan to publish it;
+- the Linux mount lane runs the installed product in a networkless, read-only container with a real nested tmpfs and requires source seal to stop before hub publication;
 - the large-snapshot lane scans 4,096 TypeScript files and proves a no-change pass uploads zero objects;
 - an unreadable Linux subtree stops source seal before the hub accepts a sequence;
 - isolated preparation verifies each master before and after its copy, requires a fresh remote repetition root, and creates the generated AI fixture before adoption;
