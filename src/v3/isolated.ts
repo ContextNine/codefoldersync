@@ -59,6 +59,7 @@ import type { VisibilityEvent, VisibilityObserverSpec } from "./visibility.js";
 export interface IsolatedMachineSpec {
   readonly machineId: string;
   readonly peerName: string;
+  readonly sshAlias: string;
   readonly endpoint: DistributedEndpoint;
   readonly command: readonly string[];
   readonly runRoot: string;
@@ -310,7 +311,7 @@ export async function runHubVisibilityObserver(
   const started = Date.now();
   while (!isAborted(signal) && Date.now() - started < spec.timeoutMs) {
     try {
-      await using transport = await HubTransport.connect(config.hub);
+      await using transport = await HubTransport.connectForPeer(config);
       while (!isAborted(signal) && Date.now() - started < spec.timeoutMs) {
         const checkpoint = await transport.checkpoint(config.folderId);
         if (lastSequence === null) {
@@ -968,15 +969,12 @@ function distributedSpec(
       repetitionId,
       "controller",
     ),
-    hub:
-      hub.endpoint.kind === "local"
-        ? { kind: "local", path: hubLayout.hub }
-        : {
-            kind: "ssh",
-            host: hub.endpoint.sshAlias ?? "",
-            path: hubLayout.hub,
-            command: hub.command,
-          },
+    hub: {
+      kind: "ssh",
+      host: hub.sshAlias,
+      path: hubLayout.hub,
+      command: hub.command,
+    },
     authority: distributedMachine(source),
     targets: targets.map((entry) => ({
       ...distributedMachine(entry),
@@ -1097,8 +1095,6 @@ async function stopServicesBestEffort(
 async function verifySshMatrix(
   spec: IsolatedFleetAcceptanceSpec,
 ): Promise<void> {
-  if (spec.machines.some((entry) => entry.endpoint.kind !== "ssh"))
-    throw new Error("Isolated fleet acceptance requires SSH on every machine");
   await Promise.all(
     spec.machines.map((origin) =>
       callIsolatedAgent(origin, {
@@ -1109,7 +1105,7 @@ async function verifySshMatrix(
           .filter((target) => target.machineId !== origin.machineId)
           .map((target) => ({
             machineId: target.machineId,
-            sshAlias: target.endpoint.sshAlias ?? "",
+            sshAlias: target.sshAlias,
             command: target.command,
           })),
       }),
@@ -1504,6 +1500,14 @@ function validateIsolatedSpec(spec: IsolatedFleetAcceptanceSpec): void {
     throw new Error("Isolated target order is invalid");
   if (!spec.targetOrder.includes(spec.hubMachineId))
     throw new Error("Isolated hub must also be a populated target");
+  if (
+    hubMachine.endpoint.kind !== "local" ||
+    spec.machines.filter((entry) => entry.endpoint.kind === "local").length !==
+      1
+  )
+    throw new Error(
+      "Isolated controller must invoke only the hub machine locally",
+    );
   for (const entry of spec.machines) {
     safeId(entry.machineId, "machine ID");
     safeId(entry.peerName, "peer name");
@@ -1521,8 +1525,10 @@ function validateIsolatedSpec(spec: IsolatedFleetAcceptanceSpec): void {
       throw new Error("Isolated machine command is missing");
     if (!isAbsolute(entry.command[0] ?? ""))
       throw new Error("Isolated machine command must be absolute");
+    if (!/^[A-Za-z0-9_.@:-]+$/u.test(entry.sshAlias))
+      throw new Error("Isolated canonical SSH alias is invalid");
     if (entry.endpoint.kind === "ssh") {
-      if (!/^[A-Za-z0-9_.@:-]+$/u.test(entry.endpoint.sshAlias ?? ""))
+      if (entry.endpoint.sshAlias !== entry.sshAlias)
         throw new Error("Isolated SSH alias is invalid");
     } else if (entry.endpoint.sshAlias !== undefined) {
       throw new Error("Isolated local endpoint cannot name an SSH alias");

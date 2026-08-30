@@ -153,7 +153,7 @@ export async function sealSourceV3(
     scanned.manifest.digest !== pendingSnapshot.snapshot.digest
   )
     throw new Error("Source changed during an interrupted seal");
-  await using transport = await HubTransport.connect(config.hub);
+  await using transport = await HubTransport.connectForPeer(config);
   let checkpoint = await transport.checkpoint(config.folderId);
   assertAcceptedConfig(config, checkpoint);
   checkpoint = await resumeOutbox(state, objects, transport, checkpoint);
@@ -218,7 +218,7 @@ export async function planAdoptionV3(
   // The derived catalog is observation state, not membership configuration.
   // Persisting it makes the approval revalidation compare stable node identity.
   state.replaceCatalog(target.manifest.entries);
-  await using transport = await HubTransport.connect(config.hub);
+  await using transport = await HubTransport.connectForPeer(config);
   const checkpoint = await transport.checkpoint(config.folderId);
   assertAcceptedConfig(config, checkpoint);
   if (checkpoint.snapshot === null) throw new Error("Source is not sealed");
@@ -274,7 +274,7 @@ export async function applyAdoptionV3(
   recoverInterruptedApplies(config, state);
   using objects = new ObjectStore(join(config.stateDir, "objects"));
   const ignore = ensureIgnore(config.root);
-  await using transport = await HubTransport.connect(config.hub);
+  await using transport = await HubTransport.connectForPeer(config);
   const checkpoint = await transport.checkpoint(config.folderId);
   assertAcceptedConfig(config, checkpoint);
   if (
@@ -416,7 +416,7 @@ export async function verifyFullV3(
     true,
   );
   try {
-    await using transport = await HubTransport.connect(config.hub);
+    await using transport = await HubTransport.connectForPeer(config);
     const checkpoint = await transport.checkpoint(config.folderId);
     assertAcceptedConfig(config, checkpoint);
     const reasons =
@@ -470,7 +470,7 @@ export async function syncFolderV3(
   const ignore = ensureIgnore(config.root);
   let local = scanNamespace(config, objects, ignore, state.catalog());
   try {
-    await using transport = await HubTransport.connect(config.hub);
+    await using transport = await HubTransport.connectForPeer(config);
     let checkpoint = await transport.checkpoint(config.folderId);
     assertAcceptedConfig(config, checkpoint);
     checkpoint = await resumeOutbox(state, objects, transport, checkpoint);
@@ -669,7 +669,7 @@ export async function cutoverAdoptionV3(
     canonicalJson(existingJournal.value) !== canonicalJson(journalValue)
   )
     throw new Error("Cutover journal does not match the requested transition");
-  await using transport = await HubTransport.connect(config.hub);
+  await using transport = await HubTransport.connectForPeer(config);
   const checkpoint = await transport.checkpoint(config.folderId);
   if (
     checkpoint.config.lifecycle === "normal" &&
@@ -761,7 +761,7 @@ export async function statusV3(config: ProductConfig): Promise<{
     conflicts: [...conflicts.values()],
   };
   try {
-    await using transport = await HubTransport.connect(config.hub);
+    await using transport = await HubTransport.connectForPeer(config);
     const checkpoint = await transport.checkpoint(config.folderId);
     assertAcceptedConfig(config, checkpoint);
     for (const conflict of await transport.conflicts(config.folderId))
@@ -796,7 +796,7 @@ export async function statusV3(config: ProductConfig): Promise<{
 export async function historyV3(
   config: ProductConfig,
 ): Promise<readonly Record<string, unknown>[]> {
-  await using transport = await HubTransport.connect(config.hub);
+  await using transport = await HubTransport.connectForPeer(config);
   return transport.history(config.folderId);
 }
 
@@ -805,7 +805,7 @@ export async function hasRemoteChangesV3(
 ): Promise<boolean> {
   verifyConfig(config);
   using state = new LocalState(config);
-  await using transport = await HubTransport.connect(config.hub);
+  await using transport = await HubTransport.connectForPeer(config);
   const checkpoint = await transport.checkpoint(config.folderId);
   assertAcceptedConfig(config, checkpoint);
   return checkpoint.sequence !== state.sequence();
@@ -883,7 +883,7 @@ export async function acceptIgnoreRevisionV3(
     { ignoreDigest: preview.nextDigest },
     authorityPrivateKey(config),
   );
-  await using transport = await HubTransport.connect(config.hub);
+  await using transport = await HubTransport.connectForPeer(config);
   await transport.updateConfig(updated, config.revision);
   saveConfig(configPath, updated, false);
   using state = new LocalState(updated);

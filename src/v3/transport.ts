@@ -75,6 +75,22 @@ export class HubTransport implements AsyncDisposable {
     return transport;
   }
 
+  /** The signed SSH route is shared by the fleet, but the enrolled hub peer
+   * opens the same absolute hub path locally. Fleet SSH intentionally has no
+   * self route. */
+  public static async connectForPeer(
+    config: ProductConfig,
+  ): Promise<HubTransport> {
+    const peer = config.peers.find((entry) => entry.peerId === config.peerId);
+    if (peer === undefined) throw new Error("Local hub peer is not enrolled");
+    if (config.hub.kind === "ssh" && peer.role === "hub")
+      return await HubTransport.connect({
+        kind: "local",
+        path: config.hub.path,
+      });
+    return await HubTransport.connect(config.hub);
+  }
+
   /** Process-isolated transport for integration tests and local harnesses. */
   public static async connectProcess(
     command: string,

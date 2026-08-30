@@ -21,8 +21,11 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import nodeTest from "node:test";
 import {
+  activatePeerProjection,
   authorityPrivateKey,
   createAuthorityConfig,
+  createPeerEnrollmentRequest,
+  enrollPeer,
   ensureIgnore,
   loadConfig,
   peerPrivateKey,
@@ -31,6 +34,7 @@ import {
 } from "../src/v3/config.js";
 import { manifestObjectIds, scanNamespace } from "../src/v3/catalog.js";
 import {
+  HubStore,
   adoptionVerificationPayload,
   conflictPayload,
   snapshotPayload,
@@ -528,6 +532,50 @@ scenario(
   "durability",
   "setup and configuration projection resume at every durable boundary",
   async (context) => {
+    await context.test(
+      "the hub peer opens its signed SSH hub path locally",
+      async () => {
+        const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-hub-peer-"));
+        try {
+          const authorityRoot = join(base, "authority", "Code");
+          createSourceTree(authorityRoot);
+          const hubPath = join(base, "hub-store");
+          const authority = createAuthorityConfig({
+            root: authorityRoot,
+            stateDir: join(base, "authority", "state"),
+            folderName: "hub-local-transport",
+            peerName: "authority",
+            hub: {
+              kind: "ssh",
+              host: "self-route-is-intentionally-absent.invalid",
+              path: hubPath,
+              command: [process.execPath],
+            },
+            backupWitness: "test-fixture",
+          });
+          const request = createPeerEnrollmentRequest({
+            folderId: authority.folderId,
+            root: join(base, "hub-peer", "Code"),
+            stateDir: join(base, "hub-peer", "state"),
+            peerName: "hub-peer",
+            role: "hub",
+          });
+          const accepted = enrollPeer(authority, request);
+          using hub = new HubStore(hubPath);
+          hub.createFolder(accepted);
+          const projected = activatePeerProjection(
+            accepted,
+            request,
+            join(base, "hub-peer", "state"),
+          );
+          await using transport = await HubTransport.connectForPeer(projected);
+          const checkpoint = await transport.checkpoint(projected.folderId);
+          assert.equal(checkpoint.config.revision, accepted.revision);
+        } finally {
+          rmSync(base, { recursive: true, force: true });
+        }
+      },
+    );
     const authorityPoints: readonly AuthoritySetupFaultPoint[] = [
       "after-authority-projection",
       "after-folder-creation",

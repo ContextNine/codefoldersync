@@ -69,7 +69,7 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - the large-snapshot lane scans 4,096 TypeScript files and proves a no-change pass uploads zero objects;
 - an unreadable Linux subtree stops source seal before the hub accepts a sequence;
 - isolated preparation verifies each master before and after its copy, requires a fresh remote repetition root, and creates the generated AI fixture before adoption;
-- the isolated controller verifies every directed SSH pair, runs the normal product setup and per-target approvals, signs cutover only inside the acceptance command, and projects the normal revision to every peer;
+- the isolated controller invokes the hub machine locally, verifies strict SSH over every directed pair of distinct machines, runs the normal product setup and per-target approvals, signs cutover only inside the acceptance command, and projects the normal revision to every peer;
 - native launchd and systemd definitions install disabled in run-qualified directories, then start, restart, stop, and uninstall under a fresh folder ID;
 - the Linux systemd lane edits while stopped and requires the next start's full reconciliation to publish the missed change;
 - long-lived source, hub, and target observers stream hashed state changes to one controller. Only that controller assigns accepted timing.
@@ -93,7 +93,7 @@ The capacity commands are read-only preflights over the exact specification and 
 
 The live AI acceptance scenario uses an explicit model command in a generated non-secret TypeScript repository inside the run root. The runner sends a versioned prompt on standard input, observes mutations with one monotonic controller clock, validates the final repository, and stores file paths and content only in the private cassette. It records model duration, first source change, final hub acceptance, per-target convergence, and path visibility p50, p95, and maximum. The second fresh repetition replays the first repetition's private cassette without invoking the model and requires the same final digest.
 
-The isolated specification names exactly three machines, stable SSH aliases, absolute run-qualified product commands, witnessed read-only masters, per-machine run roots, one hub target, and the AI command. Every base root must already contain an exact run sentinel. The controller refuses local endpoints, overlapping master and run roots, an existing unprepared repetition, a changed master, a mismatched product build, or an AI prompt other than the accepted prompt. It preserves test roots and private evidence. Service uninstall moves definitions into run-local recovery instead of deleting them.
+The isolated specification names exactly three machines, stable SSH aliases, absolute run-qualified product commands, witnessed read-only masters, per-machine run roots, one hub target, and the AI command. The controller invokes that one hub endpoint locally because the fleet intentionally does not render self-SSH routes. Each machine agent still verifies both other machines through strict canonical SSH, so all six meaningful directions must pass. Every base root must already contain an exact run sentinel. The controller refuses any other local endpoint, overlapping master and run roots, an existing unprepared repetition, a changed master, a mismatched product build, or an AI prompt other than the accepted prompt. It preserves test roots and private evidence. Service uninstall moves definitions into run-local recovery instead of deleting them.
 
 ## Required external V3 acceptance
 

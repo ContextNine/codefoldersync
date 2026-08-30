@@ -248,6 +248,7 @@ test("isolated preparation copies a witnessed master into a fresh sentinel root"
     ): IsolatedFleetAcceptanceSpec["machines"][number] => ({
       machineId,
       peerName: machineId,
+      sshAlias: machineId,
       endpoint: { kind: "local" },
       command: [process.execPath],
       runRoot,

@@ -109,7 +109,7 @@ export async function setupAuthorityV3(
     state.putJournal(journalId, "authority-setup", journalValue);
   saveConfig(configPath, config, false);
   options.fault?.("after-authority-projection");
-  await using transport = await HubTransport.connect(config.hub);
+  await using transport = await HubTransport.connectForPeer(config);
   try {
     const checkpoint = await transport.checkpoint(config.folderId);
     if (canonicalJson(checkpoint.config) !== canonicalJson(config))
@@ -153,7 +153,7 @@ export async function enrollPeerV3(
     state.putJournal(journalId, "peer-role", journalValue);
     options.fault?.("after-peer-role-journal");
   }
-  await using transport = await HubTransport.connect(updated.hub);
+  await using transport = await HubTransport.connectForPeer(updated);
   const checkpoint = await transport.checkpoint(updated.folderId);
   if (canonicalJson(checkpoint.config) !== canonicalJson(updated))
     await transport.updateConfig(updated, input.authorityConfig.revision);
