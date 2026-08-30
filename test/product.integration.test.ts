@@ -960,6 +960,38 @@ scenario(
 
 scenario(
   "normal sync",
+  "publishes a newer local state when writes continue during publication",
+  async () => {
+    await withFleet(async (fleet) => {
+      const { authority, beta } = await adoptAndCutover(fleet);
+      const path = join(authority.root, "publication-burst.txt");
+      writeFileSync(path, "first\n");
+      let changedDuringPublication = false;
+      const first = await syncFolderV3(authority, {
+        fault(point) {
+          if (point !== "after-local-publish" || changedDuringPublication)
+            return;
+          changedDuringPublication = true;
+          writeFileSync(path, "second\n");
+        },
+      });
+      assert.equal(changedDuringPublication, true);
+      assert.equal(first.status, "inconclusive", JSON.stringify(first));
+      assert.match(first.reasons.join("\n"), /changed while.*publishing/iu);
+      using state = new LocalState(authority);
+      assert.equal(state.journals().length, 0);
+      assertSynced(await syncFolderV3(authority));
+      assertSynced(await syncFolderV3(beta));
+      assert.equal(
+        readFileSync(join(beta.root, "publication-burst.txt"), "utf8"),
+        "second\n",
+      );
+    });
+  },
+);
+
+scenario(
+  "normal sync",
   "composes a directory move with a concurrent descendant edit",
   async () => {
     await withFleet(async (fleet) => {

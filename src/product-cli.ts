@@ -613,16 +613,19 @@ async function runDaemon(commandArgs: readonly string[]): Promise<void> {
   process.once("SIGINT", () => controller.abort());
   process.once("SIGTERM", () => controller.abort());
   let dirty = true;
+  let changeGeneration = 0;
   let lastReconcile = 0;
   const watcher = watchIncludedNamespace(
     config.root,
     ensureIgnore(config.root),
     () => {
       dirty = true;
+      changeGeneration += 1;
     },
     (error) => {
       process.stderr.write(`watcher degraded: ${error.message}\n`);
       dirty = true;
+      changeGeneration += 1;
     },
   );
   const interval = numberOption(
@@ -652,11 +655,15 @@ async function runDaemon(commandArgs: readonly string[]): Promise<void> {
         await delay(interval, undefined, { signal: controller.signal }).catch(
           () => undefined,
         );
+        const syncGeneration = changeGeneration;
         const result = await syncFolderV3(config);
         process.stdout.write(
           `${JSON.stringify({ at: new Date().toISOString(), ...result })}\n`,
         );
-        dirty = result.status === "offline" || result.status === "inconclusive";
+        dirty =
+          result.status === "offline" ||
+          result.status === "inconclusive" ||
+          changeGeneration !== syncGeneration;
         if (!dirty) {
           try {
             watcher.refresh();

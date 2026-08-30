@@ -49,7 +49,7 @@ Existing bytes are never unlinked as the first destructive action. Cross-filesys
 
 ## Daemon
 
-The daemon is available only after cutover. One owner-only lock prevents a second mutating process. macOS uses its native recursive watcher. Linux watches each included physical directory separately so ignored dependencies and reserved control trees never enter the watcher set. A parent event dirties the full scan before a new included directory needs its own watch. A scheduled full scan catches silently dropped native events, so correctness does not depend on watcher ordering. `daemon --reconcile-seconds` can shorten that interval for bounded acceptance runs without changing the signed service default. Services install disabled by default.
+The daemon is available only after cutover. One owner-only lock prevents a second mutating process. macOS uses its native recursive watcher. Linux watches each included physical directory separately so ignored dependencies and reserved control trees never enter the watcher set. A parent event dirties the full scan before a new included directory needs its own watch. The daemon counts watcher generations so an event received during synchronization always schedules another pass. If local files advance while their checkpoint is being published, CodeFolderSync records that accepted checkpoint as the new baseline without creating an apply journal, then publishes the newer local state on the next pass. A scheduled full scan catches silently dropped native events, so correctness does not depend on watcher ordering. `daemon --reconcile-seconds` can shorten that interval for bounded acceptance runs without changing the signed service default. Services install disabled by default.
 
 ## Status
 

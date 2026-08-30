@@ -86,6 +86,7 @@ export interface AdoptionApplyOptions {
 }
 
 export type NormalApplyFaultPoint =
+  | "after-local-publish"
   | "after-apply-journal"
   | "after-moves-staged"
   | "after-obsolete-recovery"
@@ -591,6 +592,42 @@ export async function syncFolderV3(
       checkpoint.snapshot === null
     )
       throw new Error("Accepted snapshot is unavailable");
+    if (checkpoint.snapshot.digest === local.manifest.digest) {
+      options.fault?.("after-local-publish");
+      const verified = scanNamespace(
+        config,
+        objects,
+        ignore,
+        checkpoint.snapshot.entries,
+        true,
+        true,
+      );
+      state.replaceCatalog(checkpoint.snapshot.entries, checkpoint.sequence);
+      state.acceptBaseline(checkpoint.sequence, checkpoint.snapshot.digest);
+      saveBaseline(config, checkpoint.snapshot);
+      const conflicts = activeConflictCount(
+        await transport.conflicts(config.folderId),
+      );
+      const accepted = summary(
+        config,
+        verified,
+        checkpoint.sequence,
+        true,
+        false,
+        published.uploaded,
+        0,
+        conflicts,
+      );
+      if (verified.manifest.digest !== checkpoint.snapshot.digest)
+        return {
+          ...accepted,
+          status: "inconclusive",
+          reasons: [
+            "Local namespace changed while its checkpoint was publishing; retry will publish the newer state",
+          ],
+        };
+      return accepted;
+    }
     const downloaded = await fetchSnapshotObjects(
       checkpoint.snapshot,
       transport,
