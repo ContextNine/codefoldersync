@@ -67,6 +67,7 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 | `src/v3/setup.ts`                  | Authority setup and target-local enrollment                        |
 | `src/v3/distributed.ts`            | Resumable multi-machine setup and per-target approval              |
 | `src/v3/acceptance.ts`             | Witnessed two-run real-snapshot pseudo-fleet execution             |
+| `src/v3/backup.ts`                 | Streaming encrypted capture and portable/platform recovery oracles |
 | `src/v3/isolated.ts`               | Three-machine SSH, native service, replay, and timing execution    |
 | `src/v3/visibility.ts`             | Hashed AI path-state observation for controller-owned timing       |
 | `src/v3/watcher.ts`                | Included-directory native watching and full-scan wakeups           |

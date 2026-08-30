@@ -2,17 +2,25 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
   chmodSync,
+  closeSync,
   createReadStream,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmdirSync,
+  unlinkSync,
 } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { createTreeWitness, type TreeWitness } from "./acceptance.js";
+import {
+  createArchiveMetadataDigest,
+  validateSemanticManifest,
+  writeSemanticManifest,
+} from "./backup.js";
 
 export interface EncryptedMasterRestoreSpec {
   readonly schemaVersion: 1;
@@ -31,8 +39,12 @@ export interface EncryptedMasterRestoreResult {
   readonly runId: string;
   readonly snapshotId: string;
   readonly machineId: string;
-  readonly ciphertextSha256: string;
-  readonly ciphertextBytes: number;
+  readonly archiveCiphertextSha256: string;
+  readonly archiveCiphertextBytes: number;
+  readonly manifestCiphertextSha256: string;
+  readonly manifestCiphertextBytes: number;
+  readonly portableSemanticSha256: string;
+  readonly platformMetadataVerified: boolean;
   readonly ignoredArchiveMetadataRecords: number;
   readonly protected: true;
   readonly witness: TreeWitness;
@@ -74,6 +86,16 @@ export function readEncryptedMasterRestoreSpec(
 export async function restoreEncryptedMaster(
   spec: EncryptedMasterRestoreSpec,
 ): Promise<EncryptedMasterRestoreResult> {
+  try {
+    return await restoreEncryptedMasterUnsafe(spec);
+  } catch (error) {
+    throw new Error(sanitizedRestoreFailure(error), { cause: error });
+  }
+}
+
+async function restoreEncryptedMasterUnsafe(
+  spec: EncryptedMasterRestoreSpec,
+): Promise<EncryptedMasterRestoreResult> {
   const destinationBase = resolve(spec.destinationBase);
   const destination = resolve(spec.destination);
   assertContained(destination, destinationBase, "Restore destination");
@@ -98,14 +120,17 @@ export async function restoreEncryptedMaster(
     witness.machine_id !== spec.machineId
   )
     throw new Error("Ciphertext witness does not match the restore spec");
+  if (witness.artifacts.length !== 2)
+    throw new Error("Ciphertext witness must bind exactly two artifacts");
   const entries = readdirSync(bundle, { withFileTypes: true });
   if (entries.some((entry) => !entry.isFile()))
     throw new Error("Ciphertext bundle must contain flat regular files");
-  const artifact = witness.artifacts.find((value) =>
+  const archiveArtifact = exactlyOneArtifact(witness, (value) =>
     value.name.endsWith(".tar.zst.age"),
   );
-  if (artifact === undefined)
-    throw new Error("Ciphertext witness has no archive artifact");
+  const manifestArtifact = exactlyOneArtifact(witness, (value) =>
+    value.name.endsWith("-manifest.ndjson.zst.age"),
+  );
   const expectedNames = new Set([
     "witness.json",
     ...witness.artifacts.map((value) => value.name),
@@ -115,31 +140,41 @@ export async function restoreEncryptedMaster(
     entries.some((entry) => !expectedNames.has(entry.name))
   )
     throw new Error("Ciphertext bundle entries do not match its witness");
-  const archive = join(bundle, artifact.name);
-  const archiveStat = lstatSync(archive);
-  if (!archiveStat.isFile() || archiveStat.isSymbolicLink())
-    throw new Error("Ciphertext archive must be a regular file");
-  if (archiveStat.size !== artifact.size)
-    throw new Error("Ciphertext archive size does not match its witness");
-  const digest = await fileSha256(archive);
-  if (digest !== artifact.sha256)
-    throw new Error("Ciphertext archive digest does not match its witness");
+  for (const artifact of witness.artifacts) {
+    const path = join(bundle, artifact.name);
+    const metadata = lstatSync(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink())
+      throw new Error("Ciphertext artifact must be a regular file");
+    if (metadata.size !== artifact.size)
+      throw new Error("Ciphertext artifact size does not match its witness");
+    if ((await fileSha256(path)) !== artifact.sha256)
+      throw new Error("Ciphertext artifact digest does not match its witness");
+  }
+  const archive = join(bundle, archiveArtifact.name);
+  const encryptedManifest = join(bundle, manifestArtifact.name);
 
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   mkdirSync(staging, { mode: 0o700 });
+  const expectedManifestPath = join(staging, "expected-manifest.ndjson");
+  await decryptCompressedFile(
+    encryptedManifest,
+    resolve(spec.identityPath),
+    expectedManifestPath,
+  );
+  const expectedManifest = await validateSemanticManifest(expectedManifestPath);
+  if (
+    expectedManifest.snapshotId !== spec.snapshotId ||
+    expectedManifest.machineId !== spec.machineId ||
+    expectedManifest.sourcePlatform !== spec.archivePlatform ||
+    expectedManifest.archiveMetadataSha256 === null
+  )
+    throw new Error("Semantic manifest does not match the restore spec");
   const ignoredArchiveMetadataRecords = await extractArchive(
     archive,
     resolve(spec.identityPath),
     staging,
     spec.archivePlatform,
   );
-  const stagingEntries = readdirSync(staging, { withFileTypes: true });
-  if (
-    stagingEntries.length !== 1 ||
-    stagingEntries[0]?.name !== "payload" ||
-    !stagingEntries[0].isDirectory()
-  )
-    throw new Error("Restore staging shape is invalid");
   const payload = join(staging, "payload");
   const payloadEntries = readdirSync(payload, { withFileTypes: true });
   if (
@@ -148,6 +183,46 @@ export async function restoreEncryptedMaster(
     !payloadEntries[0].isDirectory()
   )
     throw new Error("Encrypted archive must contain one Code directory");
+  const actualManifestPath = join(staging, "actual-manifest.ndjson");
+  const actualMembersPath = join(staging, "actual-members");
+  const actualManifest = await writeSemanticManifest({
+    root: join(payload, "Code"),
+    output: actualManifestPath,
+    membersOutput: actualMembersPath,
+    snapshotId: spec.snapshotId,
+    machineId: spec.machineId,
+    sourcePlatform: spec.archivePlatform,
+    archiveMetadataSha256: null,
+  });
+  if (actualManifest.portableSha256 !== expectedManifest.portableSha256)
+    throw new Error(
+      "Restored tree differs from its portable semantic manifest",
+    );
+  const platformMetadataVerified = currentPlatform() === spec.archivePlatform;
+  if (platformMetadataVerified) {
+    const actualArchiveMetadata = await createArchiveMetadataDigest(
+      join(payload, "Code"),
+      spec.archivePlatform,
+      actualMembersPath,
+    );
+    if (actualArchiveMetadata !== expectedManifest.archiveMetadataSha256)
+      throw new Error(
+        "Restored tree differs from its platform archive metadata",
+      );
+  }
+  for (const path of [
+    expectedManifestPath,
+    actualManifestPath,
+    actualMembersPath,
+  ])
+    unlinkSync(path);
+  const stagingEntries = readdirSync(staging, { withFileTypes: true });
+  if (
+    stagingEntries.length !== 1 ||
+    stagingEntries[0]?.name !== "payload" ||
+    !stagingEntries[0].isDirectory()
+  )
+    throw new Error("Restore staging shape is invalid");
   protectTree(join(payload, "Code"));
   const protectedWitness = await createTreeWitness(join(payload, "Code"));
   renameSync(payload, destination);
@@ -160,12 +235,27 @@ export async function restoreEncryptedMaster(
     runId: spec.runId,
     snapshotId: spec.snapshotId,
     machineId: spec.machineId,
-    ciphertextSha256: digest,
-    ciphertextBytes: artifact.size,
+    archiveCiphertextSha256: archiveArtifact.sha256,
+    archiveCiphertextBytes: archiveArtifact.size,
+    manifestCiphertextSha256: manifestArtifact.sha256,
+    manifestCiphertextBytes: manifestArtifact.size,
+    portableSemanticSha256: expectedManifest.portableSha256,
+    platformMetadataVerified,
     ignoredArchiveMetadataRecords,
     protected: true,
     witness: finalWitness,
   };
+}
+
+function sanitizedRestoreFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /^(?:Restore|Ciphertext|Semantic manifest|Encrypted|Restored|Protected|Unsupported restore platform)/u.test(
+      message,
+    )
+  )
+    return message;
+  return "Encrypted restore failed without publishing path details";
 }
 
 async function extractArchive(
@@ -179,39 +269,139 @@ async function extractArchive(
   const age = spawn("age", ["--decrypt", "--identity", identity, archive], {
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const tarArguments = [
-    "--extract",
-    "--zstd",
-    "--file=-",
-    `--directory=${payload}`,
-    "--no-same-owner",
-    "--delay-directory-restore",
-  ];
-  if (archivePlatform === "linux") tarArguments.push("--acls", "--xattrs");
+  const zstd = spawn("zstd", ["--decompress", "--stdout", "--quiet"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const tarArguments = extractionArguments(payload, archivePlatform);
   const tar = spawn("tar", tarArguments, {
+    env: restoreCommandEnvironment(),
     stdio: ["pipe", "ignore", "pipe"],
   });
-  if (age.stdout === null || tar.stdin === null)
+  if (
+    age.stdout === null ||
+    zstd.stdin === null ||
+    zstd.stdout === null ||
+    tar.stdin === null
+  )
     throw new Error("Restore pipeline could not connect");
-  age.stdout.pipe(tar.stdin);
+  age.stdout.pipe(zstd.stdin);
+  zstd.stdout.pipe(tar.stdin);
   const ageError = collectBounded(age.stderr);
+  const zstdError = collectBounded(zstd.stderr);
   const tarError = collectTarDiagnostics(tar.stderr, archivePlatform);
-  const [ageStatus, tarStatus] = await Promise.all([
+  const [ageStatus, zstdStatus, tarStatus] = await Promise.all([
     closeStatus(age),
+    closeStatus(zstd),
     closeStatus(tar),
   ]);
   const ageDiagnostics = await ageError;
+  const zstdDiagnostics = await zstdError;
   const tarDiagnostics = await tarError;
   if (
     ageStatus !== 0 ||
+    zstdStatus !== 0 ||
     tarStatus !== 0 ||
     ageDiagnostics.overflow ||
+    zstdDiagnostics.overflow ||
     tarDiagnostics.overflow ||
     ageDiagnostics.output.length > 0 ||
+    zstdDiagnostics.output.length > 0 ||
     tarDiagnostics.output.length > 0
   )
     throw new Error("Encrypted restore pipeline failed or emitted a warning");
   return tarDiagnostics.ignoredArchiveMetadataRecords;
+}
+
+async function decryptCompressedFile(
+  ciphertext: string,
+  identity: string,
+  output: string,
+): Promise<void> {
+  const descriptor = openSync(output, "wx", 0o600);
+  const age = spawn("age", ["--decrypt", "--identity", identity, ciphertext], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const zstd = spawn("zstd", ["--decompress", "--stdout", "--quiet"], {
+    stdio: ["pipe", descriptor, "pipe"],
+  });
+  closeSync(descriptor);
+  if (age.stdout === null || zstd.stdin === null)
+    throw new Error("Semantic manifest decrypt pipeline could not connect");
+  age.stdout.pipe(zstd.stdin);
+  const ageError = collectBounded(age.stderr);
+  const zstdError = collectBounded(zstd.stderr);
+  const [ageStatus, zstdStatus, ageDiagnostics, zstdDiagnostics] =
+    await Promise.all([
+      closeStatus(age),
+      closeStatus(zstd),
+      ageError,
+      zstdError,
+    ]);
+  if (
+    ageStatus !== 0 ||
+    zstdStatus !== 0 ||
+    ageDiagnostics.overflow ||
+    zstdDiagnostics.overflow ||
+    ageDiagnostics.output.length > 0 ||
+    zstdDiagnostics.output.length > 0
+  )
+    throw new Error("Semantic manifest decrypt failed or emitted a warning");
+}
+
+function extractionArguments(
+  payload: string,
+  archivePlatform: EncryptedMasterRestoreSpec["archivePlatform"],
+): string[] {
+  if (process.platform === "darwin")
+    return [
+      "-x",
+      "--acls",
+      "--xattrs",
+      "--fflags",
+      "--no-mac-metadata",
+      "-f",
+      "-",
+      "-C",
+      payload,
+      "-p",
+    ];
+  const arguments_ = [
+    "--extract",
+    "--file=-",
+    `--directory=${payload}`,
+    "--no-same-owner",
+    "--same-permissions",
+    "--delay-directory-restore",
+  ];
+  if (archivePlatform === "linux") arguments_.push("--acls", "--xattrs");
+  return arguments_;
+}
+
+function restoreCommandEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    LC_ALL: "C",
+    TZ: "UTC",
+    ...(process.platform === "darwin" ? { COPYFILE_DISABLE: "1" } : {}),
+  };
+}
+
+function currentPlatform(): EncryptedMasterRestoreSpec["archivePlatform"] {
+  if (process.platform === "linux") return "linux";
+  if (process.platform === "darwin") return "macos";
+  throw new Error(`Unsupported restore platform: ${process.platform}`);
+}
+
+function exactlyOneArtifact(
+  witness: CiphertextWitness,
+  predicate: (artifact: CiphertextWitness["artifacts"][number]) => boolean,
+): CiphertextWitness["artifacts"][number] {
+  const matches = witness.artifacts.filter(predicate);
+  if (matches.length !== 1)
+    throw new Error(
+      "Ciphertext witness must bind one archive and one semantic manifest",
+    );
+  return matches[0]!;
 }
 
 function protectTree(root: string): void {
@@ -307,7 +497,7 @@ async function collectTarDiagnostics(
   const acceptLine = (line: string): void => {
     if (
       archivePlatform === "macos" &&
-      /^tar: Ignoring unknown extended header keyword '(?:LIBARCHIVE\.(?:creationtime|xattr\.[^'\r\n]+)|SCHILY\.fflags)'$/u.test(
+      /^tar: Ignoring unknown extended header keyword '(?:LIBARCHIVE\.(?:creationtime|xattr\.[^'\r\n]+)|SCHILY\.(?:fflags|acl\.[^'\r\n]+))'$/u.test(
         line,
       )
     ) {

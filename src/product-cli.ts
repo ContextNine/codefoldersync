@@ -81,6 +81,10 @@ import {
 } from "./v3/types.js";
 import { installedReleaseIdentity } from "./v3/release.js";
 import {
+  captureEncryptedBackup,
+  readEncryptedBackupCaptureSpec,
+} from "./v3/backup.js";
+import {
   readEncryptedMasterRestoreSpec,
   restoreEncryptedMaster,
 } from "./v3/restore.js";
@@ -788,6 +792,16 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     printJson(await createTreeWitness(requiredOption(commandArgs, "--root")));
     return;
   }
+  if (action === "capture-backup") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Encrypted backup capture requires explicit --approve");
+    printJson(
+      await captureEncryptedBackup(
+        readEncryptedBackupCaptureSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
   if (action === "pseudo-fleet") {
     if (!flag(commandArgs, "--approve"))
       throw new Error("Pseudo-fleet acceptance requires explicit --approve");
@@ -835,7 +849,7 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     return;
   }
   throw new Error(
-    "Acceptance requires witness, restore-master, pseudo-fleet-capacity, pseudo-fleet, isolated-fleet-capacity, or isolated-fleet",
+    "Acceptance requires witness, capture-backup, restore-master, pseudo-fleet-capacity, pseudo-fleet, isolated-fleet-capacity, or isolated-fleet",
   );
 }
 
@@ -1076,6 +1090,7 @@ Commands:
   codefoldersync promote-conflict <conflict-id> [--to <relative-absent-path>]
   codefoldersync service <install|start|stop|restart|status|logs|uninstall>
   codefoldersync acceptance witness --root <path>
+  codefoldersync acceptance capture-backup --spec <path> --approve
   codefoldersync acceptance restore-master --spec <path> --approve
   codefoldersync acceptance pseudo-fleet-capacity --spec <path>
   codefoldersync acceptance pseudo-fleet --spec <path> --approve

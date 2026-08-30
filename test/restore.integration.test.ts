@@ -25,6 +25,7 @@ import {
   createTreeWitness,
   makeTreeOwnerWritable,
 } from "../src/v3/acceptance.js";
+import { writeSemanticManifest } from "../src/v3/backup.js";
 import { restoreEncryptedMaster } from "../src/v3/restore.js";
 
 test("encrypted restore verifies ciphertext and creates an immutable master", async () => {
@@ -41,6 +42,13 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
     const identity = join(root, "identity.txt");
     const archive = join(root, "snapshot.tar.zst");
     const ciphertext = join(bundle, `${machineId}.tar.zst.age`);
+    const manifest = join(root, "manifest.ndjson");
+    const members = join(root, "members");
+    const compressedManifest = join(root, "manifest.ndjson.zst");
+    const encryptedManifest = join(
+      bundle,
+      `${machineId}-manifest.ndjson.zst.age`,
+    );
     mkdirSync(join(code, "packages", "app"), { recursive: true });
     mkdirSync(bundle);
     mkdirSync(destinationBase);
@@ -62,6 +70,7 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
       "--format=pax",
       "--pax-option=LIBARCHIVE.creationtime:=123",
       "--pax-option=LIBARCHIVE.xattr.com.docker.grpcfuse.ownership:=501:20",
+      "--pax-option=SCHILY.acl.ace:=group:everyone:d::deny:12",
       "--pax-option=SCHILY.fflags:=uchg",
       `--file=${archive}`,
       "--directory",
@@ -76,9 +85,31 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
       ciphertext,
       archive,
     ]);
+    const semantic = await writeSemanticManifest({
+      root: code,
+      output: manifest,
+      membersOutput: members,
+      snapshotId,
+      machineId,
+      sourcePlatform: "macos",
+      archiveMetadataSha256: "0".repeat(64),
+    });
+    run("zstd", ["--compress", "--quiet", "-o", compressedManifest, manifest]);
+    run("age", [
+      "--encrypt",
+      "--recipient",
+      recipient,
+      "--output",
+      encryptedManifest,
+      compressedManifest,
+    ]);
     const ciphertextBytes = statSync(ciphertext).size;
     const ciphertextSha256 = createHash("sha256")
       .update(readFileSync(ciphertext))
+      .digest("hex");
+    const manifestCiphertextBytes = statSync(encryptedManifest).size;
+    const manifestCiphertextSha256 = createHash("sha256")
+      .update(readFileSync(encryptedManifest))
       .digest("hex");
     writeFileSync(
       join(bundle, "witness.json"),
@@ -91,6 +122,11 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
             name: `${machineId}.tar.zst.age`,
             size: ciphertextBytes,
             sha256: ciphertextSha256,
+          },
+          {
+            name: `${machineId}-manifest.ndjson.zst.age`,
+            size: manifestCiphertextBytes,
+            sha256: manifestCiphertextSha256,
           },
         ],
       })}\n`,
@@ -108,9 +144,13 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
       identityPath: identity,
     };
     const result = await restoreEncryptedMaster(spec);
-    assert.equal(result.ciphertextSha256, ciphertextSha256);
-    assert.equal(result.ciphertextBytes, ciphertextBytes);
-    assert.ok(result.ignoredArchiveMetadataRecords >= 3);
+    assert.equal(result.archiveCiphertextSha256, ciphertextSha256);
+    assert.equal(result.archiveCiphertextBytes, ciphertextBytes);
+    assert.equal(result.manifestCiphertextSha256, manifestCiphertextSha256);
+    assert.equal(result.manifestCiphertextBytes, manifestCiphertextBytes);
+    assert.equal(result.portableSemanticSha256, semantic.portableSha256);
+    assert.equal(result.platformMetadataVerified, false);
+    assert.ok(result.ignoredArchiveMetadataRecords >= 4);
     assert.equal(result.protected, true);
     assert.equal(result.witness.files, 4);
     assert.equal(result.witness.symlinks, 1);
@@ -141,6 +181,39 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
     assert.equal(
       lstatSync(join(destination, "Code", "a-original.txt")).ino,
       lstatSync(join(destination, "Code", "z-link.txt")).ino,
+    );
+    const corruptBundle = join(root, "corrupt-bundle");
+    cpSync(bundle, corruptBundle, { recursive: true });
+    const corruptManifest = join(
+      corruptBundle,
+      `${machineId}-manifest.ndjson.zst.age`,
+    );
+    const corrupted = readFileSync(corruptManifest);
+    corrupted[0] = (corrupted[0] ?? 0) ^ 0xff;
+    writeFileSync(corruptManifest, corrupted);
+    await assert.rejects(
+      restoreEncryptedMaster({
+        ...spec,
+        bundleDirectory: corruptBundle,
+        destination: join(destinationBase, `${machineId}-corrupt`),
+      }),
+      /Ciphertext artifact digest/u,
+    );
+    const sensitiveBundle = "/sensitive-backup-root-never-print/bundle";
+    await assert.rejects(
+      restoreEncryptedMaster({
+        ...spec,
+        bundleDirectory: sensitiveBundle,
+        destination: join(destinationBase, `${machineId}-missing`),
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.doesNotMatch(
+          error.message,
+          /sensitive-backup-root-never-print/u,
+        );
+        return true;
+      },
     );
     const masterWitness = await createTreeWitness(join(destination, "Code"));
     const workspace = join(root, "workspace");
