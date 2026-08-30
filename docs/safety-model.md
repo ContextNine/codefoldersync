@@ -19,7 +19,7 @@ V3 does not report convergence after silently discarding an observed stable byte
 
 Every discovered `.git` is classified. A physical contained directory is supported. A contained indirection or submodule target is supported with dependency-ordered materialization. Malformed, cyclic, missing, linked-worktree, or external Git directories stop the scan.
 
-Git metadata never becomes unrelated leaf events. It is captured as one immutable tree, staged, verified, swapped, and verified again.
+Git metadata never becomes unrelated leaf events. It is captured as one immutable tree, staged, verified, swapped, and verified again. Codex's persistent zero-byte `.git/codex-repo-sync.lock` is machine-local coordination state and is excluded from that tree. Any other `*.lock` inside Git metadata stops capture because it may identify an active mutation.
 
 ## Adoption boundary
 

@@ -1627,6 +1627,23 @@ scenario(
         rmSync(base, { recursive: true, force: true });
       }
     });
+
+    await context.test("Git coordination locks", () => {
+      withScanFixture((root, config, objects) => {
+        const repository = join(root, "repository");
+        createRepository(repository, "lock fixture\n");
+        const gitDirectory = join(repository, ".git");
+        writeFileSync(join(gitDirectory, "codex-repo-sync.lock"), "");
+        assert.doesNotThrow(() =>
+          scanNamespace(config, objects, ensureIgnore(root), [], true),
+        );
+        writeFileSync(join(gitDirectory, "index.lock"), "");
+        assert.throws(
+          () => scanNamespace(config, objects, ensureIgnore(root), [], true),
+          /Transient Git lock cannot be captured: index\.lock/u,
+        );
+      });
+    });
   },
 );
 

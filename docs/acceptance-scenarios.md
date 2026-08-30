@@ -41,6 +41,7 @@ The suite proves:
 - an unrelated edit during interrupted apply remains live and blocks resume;
 - directory conflict recovery works from its immutable subtree manifest;
 - contained Git indirection transfers and passes `git fsck --full`;
+- a persistent Codex repository-coordination lock is excluded while an ordinary Git lock still fails closed;
 - corrupt hub objects fail before target mutation;
 - case/Unicode aliases, FIFOs, and sockets fail closed.
 

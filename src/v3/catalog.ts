@@ -5,8 +5,8 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { assertHash, hashJson, hashText } from "../v2/hash.js";
 import type { CompiledIgnore } from "./ignore.js";
 import {
+  captureGitTree,
   capturePath,
-  captureTree,
   referencedObjects,
   type ObjectStore,
 } from "./objects.js";
@@ -329,7 +329,7 @@ function captureGitBoundary(
   if (!existsSync(physical) || !lstatSync(physical).isDirectory())
     throw new Error(`Git directory is missing: ${gitRelativePath}`);
   verifyGitDirectory(physical);
-  const captured = captureTree(physical, store);
+  const captured = captureGitTree(physical, store);
   for (const id of captured.objectIds) objectIds.add(id);
   const gitPath = relative(root, physical).replaceAll(sep, "/");
   return {

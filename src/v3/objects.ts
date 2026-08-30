@@ -115,6 +115,28 @@ export function captureTree(
   root: string,
   store: ObjectStore,
 ): { readonly manifestId: string; readonly objectIds: readonly string[] } {
+  return captureTreeWithIgnoredLocks(root, store, new Set());
+}
+
+/** Captures one complete Git boundary while excluding Codex's persistent,
+ * machine-local repository coordination lock. All other locks still stop the
+ * scan because they can indicate an in-progress Git mutation. */
+export function captureGitTree(
+  root: string,
+  store: ObjectStore,
+): { readonly manifestId: string; readonly objectIds: readonly string[] } {
+  return captureTreeWithIgnoredLocks(
+    root,
+    store,
+    new Set(["codex-repo-sync.lock"]),
+  );
+}
+
+function captureTreeWithIgnoredLocks(
+  root: string,
+  store: ObjectStore,
+  ignoredLocks: ReadonlySet<string>,
+): { readonly manifestId: string; readonly objectIds: readonly string[] } {
   const objectIds = new Set<string>();
   const rootDevice = lstatSync(root).dev;
   const walk = (path: string): string => {
@@ -122,6 +144,8 @@ export function captureTree(
     for (const entry of readdirSync(path, { withFileTypes: true }).sort(
       (left, right) => left.name.localeCompare(right.name, "en"),
     )) {
+      if (entry.name.endsWith(".lock") && ignoredLocks.has(entry.name))
+        continue;
       if (entry.name.endsWith(".lock"))
         throw new Error(`Transient Git lock cannot be captured: ${entry.name}`);
       const target = join(path, entry.name);
