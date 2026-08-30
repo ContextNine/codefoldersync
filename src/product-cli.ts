@@ -8,7 +8,6 @@ import {
   readFileSync,
   renameSync,
   unlinkSync,
-  watch,
   writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
@@ -30,6 +29,7 @@ import {
 } from "./v2/service.js";
 import {
   defaultConfigPath,
+  ensureIgnore,
   loadConfig,
   parseHubSpec,
   type PeerEnrollmentRequest,
@@ -80,6 +80,7 @@ import {
   type ProductConfig,
 } from "./v3/types.js";
 import { installedReleaseIdentity } from "./v3/release.js";
+import { watchIncludedNamespace } from "./v3/watcher.js";
 import {
   createTreeWitness,
   readPseudoFleetAcceptanceSpec,
@@ -607,25 +608,30 @@ async function runDaemon(commandArgs: readonly string[]): Promise<void> {
   process.once("SIGTERM", () => controller.abort());
   let dirty = true;
   let lastReconcile = 0;
-  const watcher = watch(config.root, { recursive: true }, () => {
-    dirty = true;
-  });
-  watcher.on("error", (error) => {
-    process.stderr.write(`watcher degraded: ${error.message}\n`);
-    dirty = true;
-  });
+  const watcher = watchIncludedNamespace(
+    config.root,
+    ensureIgnore(config.root),
+    () => {
+      dirty = true;
+    },
+    (error) => {
+      process.stderr.write(`watcher degraded: ${error.message}\n`);
+      dirty = true;
+    },
+  );
   const interval = numberOption(
     commandArgs,
     "--interval-ms",
     config.service?.intervalMs ?? 150,
   );
+  const reconcileSeconds = numberOption(
+    commandArgs,
+    "--reconcile-seconds",
+    config.service?.reconcileSeconds ?? 600,
+  );
   try {
     while (!controller.signal.aborted) {
-      if (
-        !dirty &&
-        Date.now() - lastReconcile >=
-          (config.service?.reconcileSeconds ?? 600) * 1000
-      )
+      if (!dirty && Date.now() - lastReconcile >= reconcileSeconds * 1000)
         dirty = true;
       if (!dirty) {
         try {
@@ -645,7 +651,17 @@ async function runDaemon(commandArgs: readonly string[]): Promise<void> {
           `${JSON.stringify({ at: new Date().toISOString(), ...result })}\n`,
         );
         dirty = result.status === "offline" || result.status === "inconclusive";
-        if (!dirty) lastReconcile = Date.now();
+        if (!dirty) {
+          try {
+            watcher.refresh();
+            lastReconcile = Date.now();
+          } catch (error) {
+            process.stderr.write(
+              `watcher refresh failed: ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+            dirty = true;
+          }
+        }
       }
       await delay(Math.min(interval, 250), undefined, {
         signal: controller.signal,
@@ -892,6 +908,7 @@ function positional(
     "--remote-command",
     "--remote-node",
     "--interval-ms",
+    "--reconcile-seconds",
     "--definition-dir",
     "--executable",
     "--script",

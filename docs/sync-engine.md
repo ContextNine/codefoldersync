@@ -49,7 +49,7 @@ Existing bytes are never unlinked as the first destructive action. Cross-filesys
 
 ## Daemon
 
-The daemon is available only after cutover. One owner-only lock prevents a second mutating process. Native recursive watch events coalesce into full metadata reconciliation; correctness does not depend on watcher ordering. Services install disabled by default.
+The daemon is available only after cutover. One owner-only lock prevents a second mutating process. macOS uses its native recursive watcher. Linux watches each included physical directory separately so ignored dependencies and reserved control trees never enter the watcher set. A parent event dirties the full scan before a new included directory needs its own watch. A scheduled full scan catches silently dropped native events, so correctness does not depend on watcher ordering. `daemon --reconcile-seconds` can shorten that interval for bounded acceptance runs without changing the signed service default. Services install disabled by default.
 
 ## Status
 

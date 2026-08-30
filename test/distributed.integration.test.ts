@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   chmodSync,
   existsSync,
@@ -613,6 +614,194 @@ test(
   },
 );
 
+test(
+  "native inotify overflow triggers a full scan that publishes a dropped edit",
+  {
+    skip:
+      platform() !== "linux" ||
+      spawnSync("cc", ["--version"], { stdio: "ignore" }).status !== 0,
+  },
+  async (context) => {
+    const maximumQueuedEvents = Number(
+      readFileSync("/proc/sys/fs/inotify/max_queued_events", "utf8").trim(),
+    );
+    if (
+      !Number.isSafeInteger(maximumQueuedEvents) ||
+      maximumQueuedEvents < 1 ||
+      maximumQueuedEvents > 65_536
+    ) {
+      context.skip(
+        `inotify queue limit is outside the bounded test range: ${maximumQueuedEvents}`,
+      );
+      return;
+    }
+
+    const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-inotify-"));
+    const releaseSha256 = "4".repeat(64);
+    let daemon: ReturnType<typeof spawn> | undefined;
+    try {
+      const binary = installBinary(base, releaseSha256);
+      const root = join(base, "Code");
+      const state = join(base, "state");
+      const hub = join(base, "hub");
+      const config = join(root, ".codefoldersync", "config.json");
+      const storm = join(root, "watcher-overflow-storm");
+      createTree(root, "inotify");
+      mkdirSync(storm, { recursive: true, mode: 0o700 });
+      const run = (args: readonly string[]) =>
+        spawnSync(binary, args, { encoding: "utf8" });
+      assert.equal(
+        run([
+          "setup",
+          "--mode",
+          "authority",
+          "--root",
+          root,
+          "--state",
+          state,
+          "--config",
+          config,
+          "--hub",
+          hub,
+          "--backup-witness",
+          "inotify-integration",
+        ]).status,
+        0,
+      );
+      assert.equal(run(["adoption", "seal", "--config", config]).status, 0);
+      assert.equal(
+        run(["adoption", "cutover", "--approve", "--config", config]).status,
+        0,
+      );
+      const baselineStatus = run(["status", "--config", config]);
+      assert.equal(baselineStatus.status, 0, baselineStatus.stderr);
+      const baselineSequence = Number(
+        JSON.parse(baselineStatus.stdout).hubSequence,
+      );
+
+      daemon = spawn(
+        binary,
+        [
+          "daemon",
+          "--config",
+          config,
+          "--interval-ms",
+          "10",
+          "--reconcile-seconds",
+          "1",
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      let daemonOutput = "";
+      let daemonError = "";
+      daemon.stdout?.on("data", (bytes: Buffer) => {
+        daemonOutput += bytes.toString("utf8");
+      });
+      daemon.stderr?.on("data", (bytes: Buffer) => {
+        daemonError += bytes.toString("utf8");
+      });
+      await waitForText(() => daemonOutput, "\n", 5_000, daemonError);
+      assert.ok(daemon.pid);
+      assert.equal(daemon.kill("SIGSTOP"), true);
+      await waitForText(
+        () => readFileSync(`/proc/${daemon!.pid}/status`, "utf8"),
+        "State:\tT",
+        5_000,
+        daemonError,
+      );
+
+      const witnessBinary = join(base, "inotify-overflow-witness");
+      const compiled = spawnSync(
+        "cc",
+        [
+          "-O2",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-o",
+          witnessBinary,
+          join(process.cwd(), "test", "fixtures", "inotify-overflow-witness.c"),
+        ],
+        { encoding: "utf8" },
+      );
+      assert.equal(compiled.status, 0, compiled.stderr);
+      const witness = spawn(witnessBinary, [storm], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let witnessOutput = "";
+      let witnessError = "";
+      witness.stdout.on("data", (bytes: Buffer) => {
+        witnessOutput += bytes.toString("utf8");
+      });
+      witness.stderr.on("data", (bytes: Buffer) => {
+        witnessError += bytes.toString("utf8");
+      });
+      await waitForText(() => witnessOutput, "READY\n", 5_000, witnessError);
+
+      for (let index = 0; index < maximumQueuedEvents + 1_024; index += 1)
+        writeFileSync(join(storm, `event-${index}`), "", {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+      const marker = join(root, "src", "after-overflow.ts");
+      writeFileSync(marker, "export const afterOverflow = true;\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      witness.stdin.end("x");
+      await once(witness, "exit");
+      assert.equal(witness.exitCode, 0, witnessError || witnessOutput);
+      assert.match(witnessOutput, /OVERFLOW=1/u);
+      for (let index = 0; index < maximumQueuedEvents + 1_024; index += 1)
+        rmSync(join(storm, `event-${index}`));
+
+      assert.equal(daemon.kill("SIGCONT"), true);
+      const resumedDeadline = Date.now() + 5_000;
+      let resumedStatus = "";
+      do {
+        resumedStatus = readFileSync(`/proc/${daemon.pid}/status`, "utf8");
+        if (!resumedStatus.includes("State:\tT")) break;
+        await delay(10);
+      } while (Date.now() < resumedDeadline);
+      assert.doesNotMatch(resumedStatus, /State:\tT/u);
+      const reconcileDeadline = Date.now() + 20_000;
+      let acceptedSequence = baselineSequence;
+      while (
+        acceptedSequence <= baselineSequence &&
+        Date.now() < reconcileDeadline
+      ) {
+        const status = run(["status", "--config", config]);
+        assert.equal(status.status, 0, status.stderr);
+        acceptedSequence = Number(JSON.parse(status.stdout).hubSequence);
+        if (acceptedSequence <= baselineSequence) await delay(25);
+      }
+      assert.ok(
+        acceptedSequence > baselineSequence,
+        [resumedStatus, daemonError, daemonOutput].filter(Boolean).join("\n"),
+      );
+      assert.equal(daemon.kill("SIGTERM"), true);
+      await once(daemon, "exit");
+      assert.equal(daemon.exitCode, 0, daemonError);
+      daemon = undefined;
+      const verified = run(["verify", "--full", "--config", config]);
+      assert.equal(verified.status, 0, verified.stderr);
+      assert.equal(JSON.parse(verified.stdout).status, "clean");
+      assert.equal(
+        readFileSync(marker, "utf8"),
+        "export const afterOverflow = true;\n",
+      );
+    } finally {
+      if (daemon !== undefined && daemon.exitCode === null) {
+        daemon.kill("SIGCONT");
+        daemon.kill("SIGTERM");
+        await Promise.race([once(daemon, "exit"), delay(2_000)]);
+        if (daemon.exitCode === null) daemon.kill("SIGKILL");
+      }
+      rmSync(base, { recursive: true, force: true });
+    }
+  },
+);
+
 test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one deterministic cassette", async () => {
   const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-pseudo-fleet-"));
   const runId = "pseudo-fleet-integration-001";
@@ -900,6 +1089,21 @@ for (let domain = 0; domain < 8; domain += 1) {
 rmSync(join(root, "src", "legacy", "context.ts"));
 rmSync(join(root, "src", "legacy", "obsolete.ts"));
 `;
+}
+
+async function waitForText(
+  value: () => string,
+  expected: string,
+  timeoutMs: number,
+  failureContext: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!value().includes(expected) && Date.now() < deadline) await delay(10);
+  assert.match(
+    value(),
+    new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+    failureContext,
+  );
 }
 
 function createOneTargetSpec(
