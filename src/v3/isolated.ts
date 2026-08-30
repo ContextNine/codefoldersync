@@ -1378,7 +1378,10 @@ class JsonLineProcess<Event> {
           `Observer failed: ${this.#label}: ${childFailureDetail(this.#stderr)}`,
         );
     });
-    this.#child.stdin.end(`${JSON.stringify(request)}\n`);
+    this.#child.stdin.write(`${JSON.stringify(request)}\n`, (error) => {
+      if (error !== null && error !== undefined && this.#failure === null)
+        this.#failure = new Error(`Observer request failed: ${this.#label}`);
+    });
   }
 
   async waitFor(
@@ -1401,16 +1404,27 @@ class JsonLineProcess<Event> {
 
   async stop(): Promise<void> {
     if (this.#closed) return;
+    this.#child.stdin.end();
+    if (await this.#waitForClose(2_000)) return;
     this.#child.kill("SIGTERM");
-    await new Promise<void>((resolvePromise) => {
-      const forced = setTimeout(() => {
-        this.#child.kill("SIGKILL");
-        resolvePromise();
-      }, 2_000);
-      this.#child.once("close", () => {
-        clearTimeout(forced);
-        resolvePromise();
-      });
+    if (await this.#waitForClose(2_000)) return;
+    this.#child.kill("SIGKILL");
+    if (!(await this.#waitForClose(2_000)))
+      throw new Error(`Observer did not stop: ${this.#label}`);
+  }
+
+  async #waitForClose(timeoutMs: number): Promise<boolean> {
+    if (this.#closed) return true;
+    return await new Promise<boolean>((resolveClosed) => {
+      const onClose = (): void => {
+        clearTimeout(timeout);
+        resolveClosed(true);
+      };
+      const timeout = setTimeout(() => {
+        this.#child.off("close", onClose);
+        resolveClosed(this.#closed);
+      }, timeoutMs);
+      this.#child.once("close", onClose);
     });
   }
 

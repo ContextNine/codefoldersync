@@ -1028,12 +1028,14 @@ async function readJsonStdin(): Promise<unknown> {
 }
 
 async function runVisibilityAgent(): Promise<void> {
-  const spec = readVisibilityObserverSpec(await readJsonStdin());
   const controller = new AbortController();
   const abort = (): void => controller.abort();
   process.once("SIGINT", abort);
   process.once("SIGTERM", abort);
   try {
+    const spec = readVisibilityObserverSpec(
+      await readObserverJsonStdin(controller),
+    );
     await runVisibilityObserver(
       spec,
       (event) => process.stdout.write(`${JSON.stringify(event)}\n`),
@@ -1046,12 +1048,12 @@ async function runVisibilityAgent(): Promise<void> {
 }
 
 async function runHubVisibilityAgent(): Promise<void> {
-  const spec = await readJsonStdin();
   const controller = new AbortController();
   const abort = (): void => controller.abort();
   process.once("SIGINT", abort);
   process.once("SIGTERM", abort);
   try {
+    const spec = await readObserverJsonStdin(controller);
     await runHubVisibilityObserver(
       spec,
       (event) => process.stdout.write(`${JSON.stringify(event)}\n`),
@@ -1061,6 +1063,59 @@ async function runHubVisibilityAgent(): Promise<void> {
     process.off("SIGINT", abort);
     process.off("SIGTERM", abort);
   }
+}
+
+/** Observer stdin stays open as a controller-owned lifetime channel. */
+async function readObserverJsonStdin(
+  controller: AbortController,
+): Promise<unknown> {
+  return await new Promise((resolveRequest, reject) => {
+    let input = "";
+    let resolved = false;
+    const cleanupBeforeResolution = (): void => {
+      process.stdin.off("data", onData);
+      process.stdin.off("error", onError);
+    };
+    const onError = (): void => {
+      cleanupBeforeResolution();
+      reject(new Error("Observer request stream failed"));
+    };
+    const onEnd = (): void => {
+      if (resolved) {
+        controller.abort();
+        return;
+      }
+      cleanupBeforeResolution();
+      reject(new Error("Observer request ended before its first line"));
+    };
+    const onData = (chunk: Buffer | string): void => {
+      input += Buffer.from(chunk).toString("utf8");
+      if (Buffer.byteLength(input, "utf8") > 64 * 1024 * 1024) {
+        cleanupBeforeResolution();
+        reject(new Error("Observer request exceeds 64 MiB"));
+        return;
+      }
+      const newline = input.indexOf("\n");
+      if (newline < 0) return;
+      const line = input.slice(0, newline);
+      const remainder = input.slice(newline + 1);
+      cleanupBeforeResolution();
+      if (remainder.trim() !== "") {
+        reject(new Error("Observer request contains trailing data"));
+        return;
+      }
+      try {
+        const value = JSON.parse(line) as unknown;
+        resolved = true;
+        resolveRequest(value);
+      } catch {
+        reject(new Error("Observer request is not valid JSON"));
+      }
+    };
+    process.stdin.on("data", onData);
+    process.stdin.once("error", onError);
+    process.stdin.on("end", onEnd);
+  });
 }
 
 function printHelp(): void {
