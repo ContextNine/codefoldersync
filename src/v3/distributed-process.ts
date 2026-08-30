@@ -400,7 +400,7 @@ async function callAgent(
       if (status !== 0) {
         reject(
           new Error(
-            `Distributed agent failed on ${machine.machineId}: ${request.action}`,
+            `Distributed agent failed on ${machine.machineId}: ${request.action}: ${childFailureDetail(Buffer.concat(stderr).toString("utf8"))}`,
           ),
         );
         return;
@@ -417,6 +417,13 @@ async function callAgent(
     });
     child.stdin.end(`${JSON.stringify(request)}\n`);
   });
+}
+
+function childFailureDetail(stderr: string): string {
+  const normalized = stderr.trim().replaceAll(/\s+/gu, " ");
+  return normalized.length === 0
+    ? "no stderr"
+    : normalized.slice(Math.max(0, normalized.length - 4_096));
 }
 
 function expectedLocalConfig(

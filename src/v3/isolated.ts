@@ -1266,6 +1266,7 @@ class JsonLineProcess<Event> {
   readonly #started: number;
   readonly #label: string;
   #stdout = "";
+  #stderr = "";
   #stderrBytes = 0;
   #closed = false;
   #failure: Error | null = null;
@@ -1286,6 +1287,8 @@ class JsonLineProcess<Event> {
     this.#child.stdout.on("data", (chunk: Buffer) => this.#onData(chunk));
     this.#child.stderr.on("data", (chunk: Buffer) => {
       this.#stderrBytes += chunk.length;
+      if (this.#stderr.length < 64 * 1024)
+        this.#stderr += chunk.toString("utf8").slice(0, 64 * 1024);
       if (this.#stderrBytes > 1024 * 1024) this.#child.kill("SIGTERM");
     });
     this.#child.on("error", () => {
@@ -1294,7 +1297,9 @@ class JsonLineProcess<Event> {
     this.#child.on("close", (status) => {
       this.#closed = true;
       if (status !== 0 && status !== null && this.#failure === null)
-        this.#failure = new Error(`Observer failed: ${this.#label}`);
+        this.#failure = new Error(
+          `Observer failed: ${this.#label}: ${childFailureDetail(this.#stderr)}`,
+        );
     });
     this.#child.stdin.end(`${JSON.stringify(request)}\n`);
   }
@@ -1384,6 +1389,7 @@ async function callIsolatedAgent(
       env: minimalEnvironment(),
     });
     const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
     let bytes = 0;
     const count = (chunk: Buffer): void => {
       bytes += chunk.length;
@@ -1393,7 +1399,10 @@ async function callIsolatedAgent(
       count(chunk);
       stdout.push(chunk);
     });
-    child.stderr.on("data", count);
+    child.stderr.on("data", (chunk: Buffer) => {
+      count(chunk);
+      stderr.push(chunk);
+    });
     child.on("error", () =>
       reject(
         new Error(`Isolated agent could not start: ${machineSpec.machineId}`),
@@ -1409,7 +1418,11 @@ async function callIsolatedAgent(
         return;
       }
       if (status !== 0) {
-        reject(new Error(`Isolated agent failed: ${machineSpec.machineId}`));
+        reject(
+          new Error(
+            `Isolated agent failed: ${machineSpec.machineId}: ${childFailureDetail(Buffer.concat(stderr).toString("utf8"))}`,
+          ),
+        );
         return;
       }
       try {
@@ -1426,6 +1439,13 @@ async function callIsolatedAgent(
     });
     child.stdin.end(`${JSON.stringify(request)}\n`);
   });
+}
+
+function childFailureDetail(stderr: string): string {
+  const normalized = stderr.trim().replaceAll(/\s+/gu, " ");
+  return normalized.length === 0
+    ? "no stderr"
+    : normalized.slice(Math.max(0, normalized.length - 4_096));
 }
 
 function machineInvocation(
