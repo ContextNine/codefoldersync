@@ -5,6 +5,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -47,6 +48,8 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
     writeFileSync(join(code, "tool.sh"), "#!/bin/sh\nexit 0\n", {
       mode: 0o755,
     });
+    writeFileSync(join(code, "a-original.txt"), "hard-linked\n");
+    linkSync(join(code, "a-original.txt"), join(code, "z-link.txt"));
     symlinkSync("missing-target", join(code, "broken-link"));
 
     run("age-keygen", ["--output", identity]);
@@ -106,7 +109,7 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
     assert.equal(result.ciphertextBytes, ciphertextBytes);
     assert.ok(result.ignoredArchiveMetadataRecords > 0);
     assert.equal(result.protected, true);
-    assert.equal(result.witness.files, 2);
+    assert.equal(result.witness.files, 4);
     assert.equal(result.witness.symlinks, 1);
     assert.equal(
       readFileSync(
@@ -128,6 +131,10 @@ test("encrypted restore verifies ciphertext and creates an immutable master", as
       0o111,
     );
     assert.equal(lstatSync(join(destination, "Code")).mode & 0o222, 0);
+    assert.equal(
+      lstatSync(join(destination, "Code", "a-original.txt")).ino,
+      lstatSync(join(destination, "Code", "z-link.txt")).ino,
+    );
     const masterWitness = await createTreeWitness(join(destination, "Code"));
     const workspace = join(root, "workspace");
     cpSync(join(destination, "Code"), workspace, {

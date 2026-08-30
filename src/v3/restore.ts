@@ -174,6 +174,8 @@ async function extractArchive(
   staging: string,
   archivePlatform: EncryptedMasterRestoreSpec["archivePlatform"],
 ): Promise<number> {
+  const payload = join(staging, "payload");
+  mkdirSync(payload, { mode: 0o700 });
   const age = spawn("age", ["--decrypt", "--identity", identity, archive], {
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -181,8 +183,7 @@ async function extractArchive(
     "--extract",
     "--zstd",
     "--file=-",
-    `--directory=${staging}`,
-    "--one-top-level=payload",
+    `--directory=${payload}`,
     "--no-same-owner",
     "--delay-directory-restore",
   ];
