@@ -63,6 +63,8 @@ codefoldersync service logs
 
 Install is disabled by default. `service start` and `service restart` reject adoption-mode configuration. Service activation during daily-driver adoption requires the separate cutover approval and staged peer-by-peer start.
 
+A run-qualified systemd definition remains unlinked while disabled. The first approved start creates only the exact managed user-unit link, reloads the user manager, and starts the unit. Uninstall stops and disables the unit, removes that link only when it still points to the expected definition, and moves the definition into recovery.
+
 Uninstall archives the exact definition under recovery. It does not delete the root, state, objects, conflicts, recovery, config, keys, or hub.
 
 ## V2 replacement

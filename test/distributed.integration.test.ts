@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -8,8 +9,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, platform, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import {
@@ -236,6 +237,252 @@ test("isolated preparation copies a witnessed master into a fresh sentinel root"
       true,
     );
     assert.deepEqual(await createTreeWitness(master), witness);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test(
+  "disabled systemd installation starts, restarts, and removes its exact link",
+  {
+    skip:
+      platform() !== "linux" ||
+      spawnSync("systemctl", ["--user", "show-environment"], {
+        stdio: "ignore",
+      }).status !== 0,
+  },
+  async () => {
+    const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-systemd-"));
+    const releaseSha256 = "f".repeat(64);
+    const binary = installBinary(base, releaseSha256);
+    const root = join(base, "Code");
+    const state = join(base, "state");
+    const hub = join(base, "hub");
+    const config = join(root, ".codefoldersync", "config.json");
+    const definitions = join(base, "service-definitions");
+    createTree(root, "systemd");
+    const run = (args: readonly string[]) =>
+      spawnSync(binary, args, { encoding: "utf8" });
+    let installed = false;
+    try {
+      assert.equal(
+        run([
+          "setup",
+          "--mode",
+          "authority",
+          "--root",
+          root,
+          "--state",
+          state,
+          "--config",
+          config,
+          "--hub",
+          hub,
+          "--backup-witness",
+          "systemd-integration",
+        ]).status,
+        0,
+      );
+      assert.equal(run(["adoption", "seal", "--config", config]).status, 0);
+      assert.equal(
+        run(["adoption", "cutover", "--approve", "--config", config]).status,
+        0,
+      );
+      const serviceArgs = [
+        "--config",
+        config,
+        "--definition-dir",
+        definitions,
+        "--executable",
+        binary,
+      ] as const;
+      const install = run(["service", "install", ...serviceArgs]);
+      assert.equal(install.status, 0, install.stderr);
+      const installedStatus = JSON.parse(install.stdout) as {
+        readonly running: boolean;
+        readonly definitionPath: string;
+      };
+      installed = true;
+      assert.equal(installedStatus.running, false);
+      const link = join(
+        homedir(),
+        ".config",
+        "systemd",
+        "user",
+        basename(installedStatus.definitionPath),
+      );
+      assert.equal(existsSync(link), false);
+      const started = run(["service", "start", ...serviceArgs]);
+      assert.equal(started.status, 0, started.stderr);
+      assert.equal(JSON.parse(started.stdout).running, true);
+      assert.equal(existsSync(link), true);
+      const stoppedForOfflineEdit = run(["service", "stop", ...serviceArgs]);
+      assert.equal(
+        stoppedForOfflineEdit.status,
+        0,
+        stoppedForOfflineEdit.stderr,
+      );
+      writeFileSync(
+        join(root, "src", "offline-while-stopped.ts"),
+        "export const offline = true;\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+      const restartedAfterEdit = run(["service", "start", ...serviceArgs]);
+      assert.equal(restartedAfterEdit.status, 0, restartedAfterEdit.stderr);
+      const reconcileDeadline = Date.now() + 5_000;
+      let hubSequence = 0;
+      while (hubSequence < 3 && Date.now() < reconcileDeadline) {
+        const status = run(["status", "--config", config]);
+        assert.equal(status.status, 0, status.stderr);
+        hubSequence = Number(JSON.parse(status.stdout).hubSequence);
+        if (hubSequence < 3) await delay(25);
+      }
+      assert.ok(hubSequence >= 3);
+      const restarted = run(["service", "restart", ...serviceArgs]);
+      assert.equal(restarted.status, 0, restarted.stderr);
+      assert.equal(JSON.parse(restarted.stdout).running, true);
+      const stopped = run(["service", "stop", ...serviceArgs]);
+      assert.equal(stopped.status, 0, stopped.stderr);
+      assert.equal(JSON.parse(stopped.stdout).running, false);
+      const uninstalled = run(["service", "uninstall", ...serviceArgs]);
+      assert.equal(uninstalled.status, 0, uninstalled.stderr);
+      installed = false;
+      assert.equal(existsSync(link), false);
+      assert.equal(existsSync(installedStatus.definitionPath), false);
+    } finally {
+      if (installed)
+        run([
+          "service",
+          "uninstall",
+          "--config",
+          config,
+          "--definition-dir",
+          definitions,
+          "--executable",
+          binary,
+        ]);
+      rmSync(base, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "an unreadable Linux subtree blocks sealing before hub publication",
+  { skip: platform() !== "linux" || process.getuid?.() === 0 },
+  () => {
+    const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-unreadable-"));
+    const releaseSha256 = "1".repeat(64);
+    writeFileSync(join(base, "SENTINEL"), "unreadable-integration\n", {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    const binary = installBinary(base, releaseSha256);
+    const root = join(base, "Code");
+    const state = join(base, "state");
+    const hub = join(base, "hub");
+    const config = join(root, ".codefoldersync", "config.json");
+    createTree(root, "unreadable");
+    const blocked = join(root, "blocked");
+    mkdirSync(blocked, { mode: 0o700 });
+    writeFileSync(join(blocked, "private.ts"), "export const value = 1;\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    const run = (args: readonly string[]) =>
+      spawnSync(binary, args, { encoding: "utf8" });
+    try {
+      const setup = run([
+        "setup",
+        "--mode",
+        "authority",
+        "--root",
+        root,
+        "--state",
+        state,
+        "--config",
+        config,
+        "--hub",
+        hub,
+        "--backup-witness",
+        "unreadable-integration",
+      ]);
+      assert.equal(setup.status, 0, setup.stderr);
+      chmodSync(blocked, 0o000);
+      const sealed = run(["adoption", "seal", "--config", config]);
+      assert.equal(sealed.status, 2);
+      assert.match(sealed.stderr, /EACCES|permission denied/iu);
+      const status = run(["status", "--config", config]);
+      assert.equal(status.status, 0, status.stderr);
+      assert.equal(JSON.parse(status.stdout).hubSequence, 0);
+      assert.equal(
+        readFileSync(join(root, "src", "value.ts"), "utf8"),
+        "export const value = 'unreadable';\n",
+      );
+    } finally {
+      chmodSync(blocked, 0o700);
+      rmSync(base, { recursive: true, force: true });
+    }
+  },
+);
+
+test("large recursive snapshot has a zero-upload no-change pass", () => {
+  const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-large-"));
+  const releaseSha256 = "2".repeat(64);
+  writeFileSync(join(base, "SENTINEL"), "large-integration\n", {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
+  try {
+    const binary = installBinary(base, releaseSha256);
+    const root = join(base, "Code");
+    const state = join(base, "state");
+    const hub = join(base, "hub");
+    const config = join(root, ".codefoldersync", "config.json");
+    for (let directory = 0; directory < 32; directory += 1) {
+      const current = join(root, "packages", `package-${directory}`, "src");
+      mkdirSync(current, { recursive: true, mode: 0o700 });
+      for (let file = 0; file < 128; file += 1)
+        writeFileSync(
+          join(current, `file-${file}.ts`),
+          `export const value${file} = ${directory * 128 + file};\n`,
+          { encoding: "utf8", mode: 0o600 },
+        );
+    }
+    const run = (args: readonly string[]) =>
+      spawnSync(binary, args, { encoding: "utf8" });
+    assert.equal(
+      run([
+        "setup",
+        "--mode",
+        "authority",
+        "--root",
+        root,
+        "--state",
+        state,
+        "--config",
+        config,
+        "--hub",
+        hub,
+        "--backup-witness",
+        "large-integration",
+      ]).status,
+      0,
+    );
+    const sealed = run(["adoption", "seal", "--config", config]);
+    assert.equal(sealed.status, 0, sealed.stderr);
+    assert.ok(JSON.parse(sealed.stdout).scanned >= 4_160);
+    assert.equal(
+      run(["adoption", "cutover", "--approve", "--config", config]).status,
+      0,
+    );
+    const noChange = run(["sync", "--config", config]);
+    assert.equal(noChange.status, 0, noChange.stderr);
+    assert.equal(JSON.parse(noChange.stdout).uploadedObjects, 0);
+    const verified = run(["verify", "--full", "--config", config]);
+    assert.equal(verified.status, 0, verified.stderr);
+    assert.equal(JSON.parse(verified.stdout).status, "clean");
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

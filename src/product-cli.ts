@@ -665,17 +665,17 @@ function runService(commandArgs: readonly string[]): void {
   );
   const config = loadConfig(configPath);
   const defaults = defaultServiceCommand();
+  const explicitExecutable = option(commandArgs, "--executable");
+  const explicitScript = option(commandArgs, "--script");
   const definitionDirectory = option(commandArgs, "--definition-dir");
   const options = {
     configPath,
-    executablePath: resolve(
-      option(commandArgs, "--executable") ?? defaults.executablePath,
-    ),
-    ...(option(commandArgs, "--script") === undefined
-      ? defaults.scriptPath === undefined
-        ? {}
-        : { scriptPath: defaults.scriptPath }
-      : { scriptPath: resolve(option(commandArgs, "--script") as string) }),
+    executablePath: resolve(explicitExecutable ?? defaults.executablePath),
+    ...(explicitScript !== undefined
+      ? { scriptPath: resolve(explicitScript) }
+      : explicitExecutable === undefined && defaults.scriptPath !== undefined
+        ? { scriptPath: defaults.scriptPath }
+        : {}),
     ...(definitionDirectory === undefined ? {} : { definitionDirectory }),
     activate: action !== "install" || flag(commandArgs, "--activate"),
   };

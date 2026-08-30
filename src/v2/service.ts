@@ -2,11 +2,15 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  readlinkSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir, platform, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -199,6 +203,8 @@ export function startService(
   if (manager === "launchd") {
     run("launchctl", ["bootstrap", launchdDomain(), definition]);
   } else if (manager === "systemd") {
+    ensureSystemdLink(config, definition);
+    run("systemctl", ["--user", "daemon-reload"]);
     run("systemctl", ["--user", "start", serviceUnit(config)]);
   } else {
     throw new Error("Service manager is unsupported");
@@ -271,6 +277,7 @@ export function uninstallService(
       throw new Error(
         `systemctl disable failed: ${(disabled.stderr || disabled.stdout).trim()}`,
       );
+    removeSystemdLink(config, definition);
   }
   if (!existsSync(definition)) return definition;
   const recovery = join(
@@ -367,9 +374,48 @@ function activateService(
   if (manager === "launchd") {
     run("launchctl", ["bootstrap", launchdDomain(), definition]);
   } else {
-    run("systemctl", ["--user", "link", definition]);
+    ensureSystemdLink(config, definition);
     run("systemctl", ["--user", "daemon-reload"]);
     run("systemctl", ["--user", "enable", "--now", serviceUnit(config)]);
+  }
+}
+
+function ensureSystemdLink(config: ServiceConfig, definition: string): void {
+  const link = systemdLinkPath(config);
+  const stat = lstatOrNull(link);
+  if (stat === null) {
+    run("systemctl", ["--user", "link", definition]);
+    return;
+  }
+  if (!stat.isSymbolicLink()) {
+    if (resolve(link) === resolve(definition)) return;
+    throw new Error("Systemd unit path is occupied by an unmanaged file");
+  }
+  const target = resolve(dirname(link), readlinkSync(link, "utf8"));
+  if (target !== resolve(definition))
+    throw new Error("Systemd unit link points to an unmanaged definition");
+}
+
+function removeSystemdLink(config: ServiceConfig, definition: string): void {
+  const link = systemdLinkPath(config);
+  const stat = lstatOrNull(link);
+  if (stat === null || !stat.isSymbolicLink()) return;
+  const target = resolve(dirname(link), readlinkSync(link, "utf8"));
+  if (target !== resolve(definition))
+    throw new Error("Systemd unit link points to an unmanaged definition");
+  unlinkSync(link);
+}
+
+function systemdLinkPath(config: ServiceConfig): string {
+  return join(homedir(), ".config", "systemd", "user", serviceUnit(config));
+}
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as { readonly code?: unknown }).code === "ENOENT") return null;
+    throw error;
   }
 }
 
