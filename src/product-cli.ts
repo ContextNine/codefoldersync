@@ -80,6 +80,10 @@ import {
   type ProductConfig,
 } from "./v3/types.js";
 import { installedReleaseIdentity } from "./v3/release.js";
+import {
+  readEncryptedMasterRestoreSpec,
+  restoreEncryptedMaster,
+} from "./v3/restore.js";
 import { watchIncludedNamespace } from "./v3/watcher.js";
 import {
   createTreeWitness,
@@ -784,8 +788,18 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     );
     return;
   }
+  if (action === "restore-master") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Encrypted master restore requires explicit --approve");
+    printJson(
+      await restoreEncryptedMaster(
+        readEncryptedMasterRestoreSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
   throw new Error(
-    "Acceptance requires witness, pseudo-fleet, or isolated-fleet",
+    "Acceptance requires witness, restore-master, pseudo-fleet, or isolated-fleet",
   );
 }
 
@@ -1026,6 +1040,7 @@ Commands:
   codefoldersync promote-conflict <conflict-id> [--to <relative-absent-path>]
   codefoldersync service <install|start|stop|restart|status|logs|uninstall>
   codefoldersync acceptance witness --root <path>
+  codefoldersync acceptance restore-master --spec <path> --approve
   codefoldersync acceptance pseudo-fleet --spec <path> --approve
   codefoldersync acceptance isolated-fleet --spec <path> --approve
   codefoldersync gc --dry-run [--config <path>]

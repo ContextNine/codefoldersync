@@ -26,7 +26,11 @@ import {
 } from "../v2/service.js";
 import { canonicalJson } from "../v2/hash.js";
 import { shellQuote } from "../executor.js";
-import { createTreeWitness, type TreeWitness } from "./acceptance.js";
+import {
+  createTreeWitness,
+  makeTreeOwnerWritable,
+  type TreeWitness,
+} from "./acceptance.js";
 import {
   aiWorkloadPrompt,
   createAiWorkloadFixture,
@@ -575,6 +579,7 @@ async function prepareMachine(
     errorOnExist: true,
     force: false,
   });
+  makeTreeOwnerWritable(input.workspace);
   if (existsSync(input.aiWorkspace))
     throw new Error("AI fixture path already exists in the copied master");
   createAiWorkloadFixture(input.aiWorkspace);

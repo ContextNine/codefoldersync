@@ -78,11 +78,14 @@ The pseudo-fleet command accepts only an existing run root with a matching senti
 
 ```bash
 codefoldersync acceptance witness --root /absolute/master/Code
+codefoldersync acceptance restore-master --spec /private/restore.json --approve
 codefoldersync acceptance pseudo-fleet --spec /private/pseudo-fleet.json --approve
 codefoldersync acceptance isolated-fleet --spec /private/isolated-fleet.json --approve
 ```
 
 Witness and committed result output contains aggregate counts, bytes, digests, timing, and pass state. Master paths and cassette contents remain in private run state.
+
+`restore-master` accepts one flat ciphertext bundle, its source witness, and an age identity path from a private spec. It requires an exact destination sentinel, recomputes the complete ciphertext SHA-256 before decryption, streams into a new staging directory, rejects warnings or an archive without exactly one `Code` root, removes write permission, atomically places the master, and returns only ciphertext and aggregate tree witnesses. It never contacts Drive, so a successful source-local restore does not satisfy the separate Drive-download gate.
 
 The live AI acceptance scenario uses an explicit model command in a generated non-secret TypeScript repository inside the run root. The runner sends a versioned prompt on standard input, observes mutations with one monotonic controller clock, validates the final repository, and stores file paths and content only in the private cassette. It records model duration, first source change, final hub acceptance, per-target convergence, and path visibility p50, p95, and maximum. The second fresh repetition replays the first repetition's private cassette without invoking the model and requires the same final digest.
 

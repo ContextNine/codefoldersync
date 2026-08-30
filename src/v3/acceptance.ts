@@ -146,6 +146,20 @@ export async function createTreeWitness(root: string): Promise<TreeWitness> {
   };
 }
 
+/** Acceptance copies are disposable workspaces; protected masters stay read-only. */
+export function makeTreeOwnerWritable(root: string): void {
+  const visit = (path: string): void => {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return;
+    if (!stat.isDirectory() && !stat.isFile())
+      throw new Error("Acceptance copy contains an unsupported object");
+    chmodSync(path, stat.mode | 0o200);
+    if (stat.isDirectory())
+      for (const entry of readdirSync(path)) visit(join(path, entry));
+  };
+  visit(resolve(root));
+}
+
 export async function runPseudoFleetAcceptanceV3(
   spec: PseudoFleetAcceptanceSpec,
 ): Promise<readonly PseudoFleetRunResult[]> {
@@ -359,6 +373,7 @@ function copyTree(source: string, destination: string): void {
     },
   );
   if (result.status !== 0) throw new Error("Acceptance master copy failed");
+  makeTreeOwnerWritable(destination);
 }
 
 function assertSentinel(runRoot: string, runId: string): void {
