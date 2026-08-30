@@ -177,21 +177,19 @@ async function extractArchive(
   const age = spawn("age", ["--decrypt", "--identity", identity, archive], {
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const tar = spawn(
-    "tar",
-    [
-      "--extract",
-      "--zstd",
-      "--file=-",
-      `--directory=${staging}`,
-      "--one-top-level=payload",
-      "--no-same-owner",
-      "--delay-directory-restore",
-      "--acls",
-      "--xattrs",
-    ],
-    { stdio: ["pipe", "ignore", "pipe"] },
-  );
+  const tarArguments = [
+    "--extract",
+    "--zstd",
+    "--file=-",
+    `--directory=${staging}`,
+    "--one-top-level=payload",
+    "--no-same-owner",
+    "--delay-directory-restore",
+  ];
+  if (archivePlatform === "linux") tarArguments.push("--acls", "--xattrs");
+  const tar = spawn("tar", tarArguments, {
+    stdio: ["pipe", "ignore", "pipe"],
+  });
   if (age.stdout === null || tar.stdin === null)
     throw new Error("Restore pipeline could not connect");
   age.stdout.pipe(tar.stdin);
