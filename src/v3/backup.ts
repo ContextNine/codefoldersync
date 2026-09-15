@@ -27,9 +27,16 @@ import {
   sep,
 } from "node:path";
 import { createInterface } from "node:readline";
-import { Transform, Writable } from "node:stream";
+import { Readable, Transform, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { canonicalJson } from "../v2/hash.js";
+import {
+  checkStorageBudget,
+  estimateCiphertextReceiptBytes,
+  estimateSourceCaptureTransientBytes,
+  inspectPhysicalTree,
+  type StorageProfile,
+} from "./storage.js";
 
 export type BackupPlatform = "linux" | "macos";
 
@@ -79,6 +86,25 @@ export interface EncryptedBackupCaptureResult {
   readonly ageVersion: string;
   readonly warnings: 0;
   readonly passed: true;
+}
+
+export interface StreamedEncryptedBackupCaptureSpec {
+  readonly schemaVersion: 1;
+  readonly runId: string;
+  readonly snapshotId: string;
+  readonly machineId: string;
+  readonly sourcePlatform: BackupPlatform;
+  readonly sourceCodeRoot: string;
+  readonly stagingBase: string;
+  readonly recipients: readonly string[];
+  readonly sourceStorageProfile: "mac-transient" | "wootbook-acceptance";
+  readonly receiptCommands: {
+    readonly archive: readonly string[];
+    readonly manifest: readonly string[];
+    readonly witness: readonly string[];
+    readonly finalize: readonly string[];
+    readonly abort: readonly string[];
+  };
 }
 
 interface ManifestHeader {
@@ -176,6 +202,31 @@ export function readEncryptedBackupCaptureSpec(
   return value as EncryptedBackupCaptureSpec;
 }
 
+export function readStreamedEncryptedBackupCaptureSpec(
+  path: string,
+): StreamedEncryptedBackupCaptureSpec {
+  const value = JSON.parse(readFileSync(resolve(path), "utf8")) as unknown;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("Streamed backup capture spec must be an object");
+  const input = value as Record<string, unknown>;
+  if (
+    input.schemaVersion !== 1 ||
+    !safeId(input.runId) ||
+    !safeId(input.snapshotId) ||
+    !safeId(input.machineId) ||
+    (input.sourcePlatform !== "linux" && input.sourcePlatform !== "macos") ||
+    typeof input.sourceCodeRoot !== "string" ||
+    typeof input.stagingBase !== "string" ||
+    !Array.isArray(input.recipients) ||
+    input.recipients.some((recipient) => typeof recipient !== "string") ||
+    (input.sourceStorageProfile !== "mac-transient" &&
+      input.sourceStorageProfile !== "wootbook-acceptance") ||
+    !receiptCommands(input.receiptCommands)
+  )
+    throw new Error("Streamed backup capture spec is invalid");
+  return value as StreamedEncryptedBackupCaptureSpec;
+}
+
 export async function captureEncryptedBackup(
   spec: EncryptedBackupCaptureSpec,
 ): Promise<EncryptedBackupCaptureResult> {
@@ -183,6 +234,150 @@ export async function captureEncryptedBackup(
     return await captureEncryptedBackupUnsafe(spec);
   } catch (error) {
     throw new Error(sanitizedCaptureFailure(error), { cause: error });
+  }
+}
+
+export async function captureStreamedEncryptedBackup(
+  spec: StreamedEncryptedBackupCaptureSpec,
+): Promise<EncryptedBackupCaptureResult> {
+  try {
+    return await captureStreamedEncryptedBackupUnsafe(spec);
+  } catch (error) {
+    throw new Error(sanitizedCaptureFailure(error), { cause: error });
+  }
+}
+
+async function captureStreamedEncryptedBackupUnsafe(
+  spec: StreamedEncryptedBackupCaptureSpec,
+): Promise<EncryptedBackupCaptureResult> {
+  const validated = validateStreamedCaptureSpec(spec);
+  const sourceInventory = inspectPhysicalTree(validated.sourceCodeRoot);
+  const baseline = inspectPhysicalTree(validated.stagingBase).allocatedBytes;
+  checkSourceStorage(
+    validated,
+    baseline,
+    estimateSourceCaptureTransientBytes(sourceInventory),
+  );
+  const projectedReceiptBytes = estimateCiphertextReceiptBytes(sourceInventory);
+  const work = join(
+    validated.stagingBase,
+    `.capture-stream-${spec.snapshotId}-${spec.machineId}`,
+  );
+  if (existsSync(work))
+    throw new Error("Streamed backup capture work directory exists");
+  mkdirSync(work, { mode: 0o700 });
+  writeFileSync(join(work, "SENTINEL"), `${spec.runId}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  const preManifest = join(work, "pre.ndjson");
+  const preMembers = join(work, "pre.members");
+  const finalManifest = join(work, "final.ndjson");
+  const finalMembers = join(work, "final.members");
+  const archiveName = `${spec.machineId}-Code.tar.zst.age`;
+  const manifestName = `${spec.machineId}-manifest.ndjson.zst.age`;
+  let finalized = false;
+  try {
+    const before = await writeSemanticManifest({
+      root: validated.sourceCodeRoot,
+      output: preManifest,
+      membersOutput: preMembers,
+      snapshotId: spec.snapshotId,
+      machineId: spec.machineId,
+      sourcePlatform: spec.sourcePlatform,
+      archiveMetadataSha256: null,
+    });
+    checkSourceStorage(validated, baseline, 0);
+    const archive = await createEncryptedArchiveStream({
+      sourceCodeRoot: validated.sourceCodeRoot,
+      sourcePlatform: spec.sourcePlatform,
+      membersPath: preMembers,
+      recipients: validated.recipients,
+      receiptCommand: validated.receiptCommands.archive,
+      expectedKind: "archive",
+      expectedName: archiveName,
+    });
+    const after = await writeSemanticManifest({
+      root: validated.sourceCodeRoot,
+      output: finalManifest,
+      membersOutput: finalMembers,
+      snapshotId: spec.snapshotId,
+      machineId: spec.machineId,
+      sourcePlatform: spec.sourcePlatform,
+      archiveMetadataSha256: archive.archiveMetadataSha256,
+    });
+    const recapturedArchiveMetadataSha256 = await createArchiveMetadataDigest(
+      validated.sourceCodeRoot,
+      spec.sourcePlatform,
+      finalMembers,
+    );
+    if (
+      before.portableSha256 !== after.portableSha256 ||
+      (await fileSha256(preMembers)) !== (await fileSha256(finalMembers)) ||
+      recapturedArchiveMetadataSha256 !== archive.archiveMetadataSha256
+    )
+      throw new Error("Code folder changed during backup capture");
+    checkSourceStorage(validated, baseline, 0);
+    const manifest = await encryptCompressedFileStream(
+      finalManifest,
+      validated.recipients,
+      validated.receiptCommands.manifest,
+      "manifest",
+      manifestName,
+    );
+    const artifacts = [
+      { name: archive.name, size: archive.size, sha256: archive.sha256 },
+      manifest,
+    ];
+    const tarVersion = commandVersion("tar", ["--version"]);
+    const zstdVersion = commandVersion("zstd", ["--version"]);
+    const ageVersion = commandVersion("age", ["--version"]);
+    const witness = {
+      schema_version: 1,
+      snapshot_id: spec.snapshotId,
+      machine_id: spec.machineId,
+      artifacts,
+      capture: {
+        schema_version: 1,
+        source_platform: spec.sourcePlatform,
+        portable_semantic_sha256: after.portableSha256,
+        archive_metadata_sha256: archive.archiveMetadataSha256,
+        warnings: 0,
+        projected_receipt_bytes: projectedReceiptBytes,
+        tools: { age: ageVersion, tar: tarVersion, zstd: zstdVersion },
+      },
+    };
+    await runReceiptInputCommand(
+      validated.receiptCommands.witness,
+      Buffer.from(`${JSON.stringify(witness)}\n`),
+    );
+    const finalizedReceipt = await runReceiptInputCommand(
+      validated.receiptCommands.finalize,
+      null,
+    );
+    if (finalizedReceipt.finalized !== true)
+      throw new Error("Remote ciphertext receipt did not finalize");
+    finalized = true;
+    return {
+      schemaVersion: 1,
+      runId: spec.runId,
+      snapshotId: spec.snapshotId,
+      machineId: spec.machineId,
+      sourcePlatform: spec.sourcePlatform,
+      artifacts,
+      semantic: after,
+      tarVersion,
+      zstdVersion,
+      ageVersion,
+      warnings: 0,
+      passed: true,
+    };
+  } finally {
+    if (!finalized)
+      await runReceiptInputCommand(validated.receiptCommands.abort, null, true);
+    if (existsSync(work)) rmSync(work, { recursive: true });
+    checkSourceStorage(validated, baseline, 0);
   }
 }
 
@@ -894,6 +1089,14 @@ interface ValidatedCaptureSpec {
   readonly recipients: readonly [string, string];
 }
 
+interface ValidatedStreamedCaptureSpec {
+  readonly sourceCodeRoot: string;
+  readonly stagingBase: string;
+  readonly recipients: readonly [string, string];
+  readonly sourceStorageProfile: "mac-transient" | "wootbook-acceptance";
+  readonly receiptCommands: StreamedEncryptedBackupCaptureSpec["receiptCommands"];
+}
+
 function validateCaptureSpec(
   spec: EncryptedBackupCaptureSpec,
 ): ValidatedCaptureSpec {
@@ -938,6 +1141,90 @@ function validateCaptureSpec(
     bundleDirectory,
     recipients: [recipients[0]!, recipients[1]!],
   };
+}
+
+function validateStreamedCaptureSpec(
+  spec: StreamedEncryptedBackupCaptureSpec,
+): ValidatedStreamedCaptureSpec {
+  if (
+    spec.schemaVersion !== 1 ||
+    !safeId(spec.runId) ||
+    !safeId(spec.snapshotId) ||
+    !safeId(spec.machineId) ||
+    !receiptCommands(spec.receiptCommands)
+  )
+    throw new Error("Streamed backup capture identity is invalid");
+  if (spec.sourcePlatform !== currentPlatform())
+    throw new Error("Backup capture platform does not match this machine");
+  if (
+    spec.sourceStorageProfile !== "mac-transient" &&
+    spec.sourceStorageProfile !== "wootbook-acceptance"
+  )
+    throw new Error("Streamed backup storage profile is invalid");
+  const sourceCodeRoot = resolve(spec.sourceCodeRoot);
+  const stagingBase = resolve(spec.stagingBase);
+  if (basename(sourceCodeRoot) !== "Code")
+    throw new Error("Backup source root must be named Code");
+  const sourceStat = lstatSync(sourceCodeRoot);
+  const stagingStat = lstatSync(stagingBase);
+  if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink())
+    throw new Error("Backup source must be a physical directory");
+  if (!stagingStat.isDirectory() || stagingStat.isSymbolicLink())
+    throw new Error("Backup staging base must be a physical directory");
+  if (readFileSync(join(stagingBase, "SENTINEL"), "utf8") !== `${spec.runId}\n`)
+    throw new Error("Backup staging sentinel does not match the run ID");
+  if (
+    contained(sourceCodeRoot, stagingBase) ||
+    contained(stagingBase, sourceCodeRoot)
+  )
+    throw new Error("Backup staging and source roots must be disjoint");
+  const recipients = [...new Set(spec.recipients)];
+  if (
+    recipients.length !== 2 ||
+    recipients.some((value) => !SAFE_RECIPIENT.test(value))
+  )
+    throw new Error("Backup capture requires two distinct age recipients");
+  return {
+    sourceCodeRoot,
+    stagingBase,
+    recipients: [recipients[0]!, recipients[1]!],
+    sourceStorageProfile: spec.sourceStorageProfile,
+    receiptCommands: spec.receiptCommands,
+  };
+}
+
+function receiptCommands(
+  value: unknown,
+): value is StreamedEncryptedBackupCaptureSpec["receiptCommands"] {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const commands = value as Record<string, unknown>;
+  return ["archive", "manifest", "witness", "finalize", "abort"].every(
+    (name) => {
+      const command = commands[name];
+      return (
+        Array.isArray(command) &&
+        command.length > 0 &&
+        command.every(
+          (part) =>
+            typeof part === "string" && part.length > 0 && !part.includes("\0"),
+        )
+      );
+    },
+  );
+}
+
+function checkSourceStorage(
+  spec: ValidatedStreamedCaptureSpec,
+  baselineAllocatedBytes: number,
+  projectedAdditionalBytes: number,
+): void {
+  checkStorageBudget({
+    profile: spec.sourceStorageProfile satisfies StorageProfile,
+    inventory: inspectPhysicalTree(spec.stagingBase),
+    baselineAllocatedBytes,
+    projectedAdditionalBytes,
+  });
 }
 
 async function createEncryptedArchive(input: {
@@ -993,6 +1280,76 @@ async function createEncryptedArchive(input: {
   return hasher.digest();
 }
 
+interface StreamedArtifactReceipt {
+  readonly name: string;
+  readonly size: number;
+  readonly sha256: string;
+}
+
+async function createEncryptedArchiveStream(input: {
+  readonly sourceCodeRoot: string;
+  readonly sourcePlatform: BackupPlatform;
+  readonly membersPath: string;
+  readonly recipients: readonly [string, string];
+  readonly receiptCommand: readonly string[];
+  readonly expectedKind: "archive";
+  readonly expectedName: string;
+}): Promise<
+  StreamedArtifactReceipt & { readonly archiveMetadataSha256: string }
+> {
+  const tar = spawn(
+    "tar",
+    tarArguments(input.sourceCodeRoot, input.sourcePlatform),
+    {
+      env: commandEnvironment(input.sourcePlatform),
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  const zstd = spawn(
+    "zstd",
+    ["--compress", "--stdout", "--quiet", "-T0", "-3"],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const ageArguments = ["--encrypt"];
+  for (const recipient of input.recipients)
+    ageArguments.push("--recipient", recipient);
+  const age = spawn("age", ageArguments, {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (
+    tar.stdin === null ||
+    tar.stdout === null ||
+    zstd.stdin === null ||
+    zstd.stdout === null ||
+    age.stdin === null ||
+    age.stdout === null
+  )
+    throw new Error("Streamed encrypted archive pipeline could not connect");
+  const hasher = new TarMetadataHasher();
+  const tarDiagnostics = collectBounded(tar.stderr);
+  const zstdDiagnostics = collectBounded(zstd.stderr);
+  const ageDiagnostics = collectBounded(age.stderr);
+  const receipt = streamToReceipt(
+    age.stdout,
+    input.receiptCommand,
+    input.expectedKind,
+    input.expectedName,
+  );
+  const [, , , , , , received] = await Promise.all([
+    pipeline(createReadStream(resolve(input.membersPath)), tar.stdin),
+    pipeline(tar.stdout, hasher, zstd.stdin),
+    pipeline(zstd.stdout, age.stdin),
+    requireCleanChild(tar, "tar", tarDiagnostics),
+    requireCleanChild(zstd, "zstd", zstdDiagnostics),
+    requireCleanChild(age, "age", ageDiagnostics),
+    receipt,
+  ]);
+  return {
+    ...received,
+    archiveMetadataSha256: hasher.digest(),
+  };
+}
+
 async function encryptCompressedFile(
   input: string,
   recipients: readonly [string, string],
@@ -1023,6 +1380,130 @@ async function encryptCompressedFile(
     requireCleanChild(zstd, "zstd", zstdDiagnostics),
     requireCleanChild(age, "age", ageDiagnostics),
   ]);
+}
+
+async function encryptCompressedFileStream(
+  input: string,
+  recipients: readonly [string, string],
+  receiptCommand: readonly string[],
+  expectedKind: "manifest",
+  expectedName: string,
+): Promise<StreamedArtifactReceipt> {
+  const zstd = spawn(
+    "zstd",
+    ["--compress", "--stdout", "--quiet", "-T0", "-3"],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const ageArguments = ["--encrypt"];
+  for (const recipient of recipients)
+    ageArguments.push("--recipient", recipient);
+  const age = spawn("age", ageArguments, {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (
+    zstd.stdin === null ||
+    zstd.stdout === null ||
+    age.stdin === null ||
+    age.stdout === null
+  )
+    throw new Error("Streamed encrypted manifest pipeline could not connect");
+  const zstdDiagnostics = collectBounded(zstd.stderr);
+  const ageDiagnostics = collectBounded(age.stderr);
+  const receipt = streamToReceipt(
+    age.stdout,
+    receiptCommand,
+    expectedKind,
+    expectedName,
+  );
+  const [, , , , received] = await Promise.all([
+    pipeline(createReadStream(resolve(input)), zstd.stdin),
+    pipeline(zstd.stdout, age.stdin),
+    requireCleanChild(zstd, "zstd", zstdDiagnostics),
+    requireCleanChild(age, "age", ageDiagnostics),
+    receipt,
+  ]);
+  return received;
+}
+
+async function streamToReceipt(
+  input: Readable,
+  command: readonly string[],
+  expectedKind: "archive" | "manifest",
+  expectedName: string,
+): Promise<StreamedArtifactReceipt> {
+  const [executable, ...arguments_] = command;
+  if (executable === undefined)
+    throw new Error("Backup receipt command is empty");
+  const child = spawn(executable, arguments_, {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (child.stdin === null)
+    throw new Error("Backup receipt command has no input");
+  const hash = createHash("sha256");
+  let size = 0;
+  const counter = new Transform({
+    transform: (chunk: Buffer, _encoding, callback) => {
+      size += chunk.length;
+      hash.update(chunk);
+      callback(null, chunk);
+    },
+  });
+  const output = collectBounded(child.stdout);
+  const diagnostics = collectBounded(child.stderr);
+  await Promise.all([
+    pipeline(input, counter, child.stdin),
+    requireCleanChild(child, "backup receipt", diagnostics),
+  ]);
+  const captured = await output;
+  if (captured.overflow || captured.output.length === 0)
+    throw new Error("Backup receipt returned invalid evidence");
+  const value = JSON.parse(captured.output.toString("utf8")) as unknown;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("Backup receipt returned invalid evidence");
+  const receipt = value as Record<string, unknown>;
+  const sourceSha256 = hash.digest("hex");
+  if (
+    receipt.received !== true ||
+    receipt.artifact !== expectedKind ||
+    receipt.name !== expectedName ||
+    receipt.size !== size ||
+    receipt.sha256 !== sourceSha256
+  )
+    throw new Error("Source and remote ciphertext receipts differ");
+  return { name: expectedName, size, sha256: sourceSha256 };
+}
+
+async function runReceiptInputCommand(
+  command: readonly string[],
+  input: Buffer | null,
+  bestEffort = false,
+): Promise<Record<string, unknown>> {
+  try {
+    const [executable, ...arguments_] = command;
+    if (executable === undefined)
+      throw new Error("Backup receipt command is empty");
+    const child = spawn(executable, arguments_, {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    if (child.stdin === null)
+      throw new Error("Backup receipt command has no input");
+    const output = collectBounded(child.stdout);
+    const diagnostics = collectBounded(child.stderr);
+    await Promise.all([
+      pipeline(Readable.from(input === null ? [] : [input]), child.stdin),
+      requireCleanChild(child, "backup receipt", diagnostics),
+    ]);
+    const captured = await output;
+    if (captured.overflow || captured.output.length === 0)
+      throw new Error("Backup receipt returned invalid evidence");
+    const value = JSON.parse(captured.output.toString("utf8")) as unknown;
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+      throw new Error("Backup receipt returned invalid evidence");
+    return value as Record<string, unknown>;
+  } catch (error) {
+    if (bestEffort) return {};
+    throw error;
+  }
 }
 
 function tarArguments(

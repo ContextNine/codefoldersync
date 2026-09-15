@@ -40,3 +40,9 @@ The first accepted causal state remains canonical. Concurrent losing leaf conten
 Repository integration uses fresh temporary roots and local hubs. Historical sentinel-protected fleet harnesses remain isolated from `~/Code`. No repository test may use the default daily-driver config, active binary, hub, service label, backup fixture master, or real Code folder.
 
 The implementation being green is not authorization to install dependencies, authenticate cloud storage, mutate daily-driver roots, activate services, or delete V2/recovery data.
+
+## Acceptance storage boundary
+
+Acceptance storage uses fixed physical-allocation profiles: 5 GiB transient per Mac, 25 GiB for the generated non-secret corpus, a 150 GiB normal Wootbook target, and a 200 GiB Wootbook hard limit. Sparse logical length never substitutes for allocated-byte measurement, and hard-linked inodes are counted once.
+
+Bulk cleanup requires an absolute run-qualified root with its exact sentinel. It never follows a symlink, crosses to a daily-driver root, or targets Drive backups, adoption recovery, V2 evidence, credentials, configuration, or active product state. Cleanup failure is a failed gate rather than permission to broaden the deletion.

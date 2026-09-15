@@ -21,6 +21,11 @@ import {
   validateSemanticManifest,
   writeSemanticManifest,
 } from "./backup.js";
+import {
+  checkStorageBudget,
+  cleanupRunRoot,
+  inspectPhysicalTree,
+} from "./storage.js";
 
 export interface EncryptedMasterRestoreSpec {
   readonly schemaVersion: 1;
@@ -48,6 +53,16 @@ export interface EncryptedMasterRestoreResult {
   readonly ignoredArchiveMetadataRecords: number;
   readonly protected: true;
   readonly witness: TreeWitness;
+}
+
+export interface EncryptedRestoreSlotResult extends EncryptedMasterRestoreResult {
+  readonly slotCleaned: true;
+  readonly removedAllocatedBytes: number;
+}
+
+export interface EncryptedRestoreSlotSpec extends EncryptedMasterRestoreSpec {
+  readonly baselineAllocatedBytes: number;
+  readonly projectedAdditionalBytes: number;
 }
 
 interface CiphertextWitness {
@@ -83,6 +98,24 @@ export function readEncryptedMasterRestoreSpec(
   return value as EncryptedMasterRestoreSpec;
 }
 
+export function readEncryptedRestoreSlotSpec(
+  path: string,
+): EncryptedRestoreSlotSpec {
+  const value = JSON.parse(readFileSync(resolve(path), "utf8")) as unknown;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("Encrypted restore slot spec must be an object");
+  const input = value as Record<string, unknown>;
+  readEncryptedMasterRestoreSpec(path);
+  if (
+    !Number.isSafeInteger(input.baselineAllocatedBytes) ||
+    Number(input.baselineAllocatedBytes) < 0 ||
+    !Number.isSafeInteger(input.projectedAdditionalBytes) ||
+    Number(input.projectedAdditionalBytes) < 0
+  )
+    throw new Error("Encrypted restore slot budget is invalid");
+  return value as EncryptedRestoreSlotSpec;
+}
+
 export async function restoreEncryptedMaster(
   spec: EncryptedMasterRestoreSpec,
 ): Promise<EncryptedMasterRestoreResult> {
@@ -91,6 +124,51 @@ export async function restoreEncryptedMaster(
   } catch (error) {
     throw new Error(sanitizedRestoreFailure(error), { cause: error });
   }
+}
+
+export async function verifyEncryptedRestoreSlot(
+  spec: EncryptedRestoreSlotSpec,
+): Promise<EncryptedRestoreSlotResult> {
+  const slot = resolve(spec.destinationBase);
+  const bundle = resolve(spec.bundleDirectory);
+  const identity = resolve(spec.identityPath);
+  assertContained(bundle, slot, "Restore slot bundle");
+  if (identity === slot || identity.startsWith(`${slot}${sep}`))
+    throw new Error("Restore identity must remain outside the disposable slot");
+  checkStorageBudget({
+    profile: "wootbook-acceptance",
+    inventory: inspectPhysicalTree(slot),
+    baselineAllocatedBytes: spec.baselineAllocatedBytes,
+    projectedAdditionalBytes: spec.projectedAdditionalBytes,
+  });
+  let result: EncryptedMasterRestoreResult;
+  let removedAllocatedBytes = 0;
+  try {
+    result = await restoreEncryptedMaster(spec);
+    checkStorageBudget({
+      profile: "wootbook-acceptance",
+      inventory: inspectPhysicalTree(slot),
+      baselineAllocatedBytes: spec.baselineAllocatedBytes,
+      projectedAdditionalBytes: 0,
+    });
+  } finally {
+    if (existsSync(slot)) {
+      const cleaned = cleanupRunRoot({
+        schemaVersion: 1,
+        runId: spec.runId,
+        runRoot: slot,
+      });
+      if (!cleaned.removed)
+        throw new Error("Sequential restore slot cleanup failed");
+      removedAllocatedBytes = cleaned.removedAllocatedBytes;
+    }
+  }
+  if (existsSync(slot)) throw new Error("Sequential restore slot remains");
+  return {
+    ...result,
+    slotCleaned: true,
+    removedAllocatedBytes,
+  };
 }
 
 async function restoreEncryptedMasterUnsafe(

@@ -82,12 +82,31 @@ import {
 import { installedReleaseIdentity } from "./v3/release.js";
 import {
   captureEncryptedBackup,
+  captureStreamedEncryptedBackup,
   readEncryptedBackupCaptureSpec,
+  readStreamedEncryptedBackupCaptureSpec,
 } from "./v3/backup.js";
 import {
   readEncryptedMasterRestoreSpec,
+  readEncryptedRestoreSlotSpec,
   restoreEncryptedMaster,
+  verifyEncryptedRestoreSlot,
 } from "./v3/restore.js";
+import {
+  checkStorageBudget,
+  cleanupRunRoot,
+  inspectPhysicalTree,
+  readCleanupRunSpec,
+  type StorageProfile,
+} from "./v3/storage.js";
+import {
+  finalizeBackupReceipt,
+  readBackupReceiptSpec,
+  receiveBackupArtifact,
+  receiveBackupWitness,
+  type BackupArtifactKind,
+} from "./v3/receipt.js";
+import { generateBoundedCorpus, readBoundedCorpusSpec } from "./v3/corpus.js";
 import { watchIncludedNamespace } from "./v3/watcher.js";
 import {
   createTreeWitness,
@@ -792,12 +811,100 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     printJson(await createTreeWitness(requiredOption(commandArgs, "--root")));
     return;
   }
+  if (action === "storage-inventory") {
+    printJson(inspectPhysicalTree(requiredOption(commandArgs, "--root")));
+    return;
+  }
+  if (action === "storage-budget") {
+    const profile = storageProfile(requiredOption(commandArgs, "--profile"));
+    const inventory = inspectPhysicalTree(
+      requiredOption(commandArgs, "--root"),
+    );
+    printJson(
+      checkStorageBudget({
+        profile,
+        inventory,
+        baselineAllocatedBytes: byteCountOption(
+          commandArgs,
+          "--baseline-allocated-bytes",
+        ),
+        projectedAdditionalBytes: byteCountOption(
+          commandArgs,
+          "--projected-additional-bytes",
+        ),
+      }),
+    );
+    return;
+  }
+  if (action === "cleanup-run") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Acceptance cleanup requires explicit --approve");
+    printJson(
+      cleanupRunRoot(readCleanupRunSpec(requiredOption(commandArgs, "--spec"))),
+    );
+    return;
+  }
+  if (action === "receive-backup-artifact") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Backup receipt requires explicit --approve");
+    printJson(
+      await receiveBackupArtifact(
+        readBackupReceiptSpec(requiredOption(commandArgs, "--spec")),
+        backupArtifactKind(requiredOption(commandArgs, "--artifact")),
+        process.stdin,
+      ),
+    );
+    return;
+  }
+  if (action === "receive-backup-witness") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Backup witness receipt requires explicit --approve");
+    printJson(
+      await receiveBackupWitness(
+        readBackupReceiptSpec(requiredOption(commandArgs, "--spec")),
+        process.stdin,
+      ),
+    );
+    return;
+  }
+  if (action === "finalize-backup-receipt") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Backup receipt finalize requires explicit --approve");
+    printJson(
+      await finalizeBackupReceipt(
+        readBackupReceiptSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
+  if (action === "generate-bounded-corpus") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Bounded corpus generation requires explicit --approve");
+    printJson(
+      await generateBoundedCorpus(
+        readBoundedCorpusSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
   if (action === "capture-backup") {
     if (!flag(commandArgs, "--approve"))
       throw new Error("Encrypted backup capture requires explicit --approve");
     printJson(
       await captureEncryptedBackup(
         readEncryptedBackupCaptureSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
+  if (action === "capture-backup-stream") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Streamed backup capture requires explicit --approve");
+    printJson(
+      await captureStreamedEncryptedBackup(
+        readStreamedEncryptedBackupCaptureSpec(
+          requiredOption(commandArgs, "--spec"),
+        ),
       ),
     );
     return;
@@ -848,9 +955,42 @@ async function runAcceptance(commandArgs: readonly string[]): Promise<void> {
     );
     return;
   }
-  throw new Error(
-    "Acceptance requires witness, capture-backup, restore-master, pseudo-fleet-capacity, pseudo-fleet, isolated-fleet-capacity, or isolated-fleet",
-  );
+  if (action === "verify-restore-slot") {
+    if (!flag(commandArgs, "--approve"))
+      throw new Error("Sequential restore slot requires explicit --approve");
+    printJson(
+      await verifyEncryptedRestoreSlot(
+        readEncryptedRestoreSlotSpec(requiredOption(commandArgs, "--spec")),
+      ),
+    );
+    return;
+  }
+  throw new Error("Acceptance action is not recognized");
+}
+
+function storageProfile(value: string): StorageProfile {
+  if (
+    value !== "mac-transient" &&
+    value !== "wootbook-acceptance" &&
+    value !== "bounded-corpus"
+  )
+    throw new Error("Storage profile is invalid");
+  return value;
+}
+
+function backupArtifactKind(value: string): BackupArtifactKind {
+  if (value !== "archive" && value !== "manifest")
+    throw new Error("Backup artifact kind is invalid");
+  return value;
+}
+
+function byteCountOption(commandArgs: readonly string[], name: string): number {
+  const value = requiredOption(commandArgs, name);
+  if (!/^\d+$/u.test(value)) throw new Error(`${name} must be a byte count`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed))
+    throw new Error(`${name} exceeds the safe integer range`);
+  return parsed;
 }
 
 function acquireDaemonLock(config: ProductConfig): () => void {
@@ -1145,8 +1285,17 @@ Commands:
   codefoldersync promote-conflict <conflict-id> [--to <relative-absent-path>]
   codefoldersync service <install|start|stop|restart|status|logs|uninstall>
   codefoldersync acceptance witness --root <path>
+  codefoldersync acceptance storage-inventory --root <path>
+  codefoldersync acceptance storage-budget --root <path> --profile <mac-transient|wootbook-acceptance|bounded-corpus> --baseline-allocated-bytes <bytes> --projected-additional-bytes <bytes>
+  codefoldersync acceptance cleanup-run --spec <path> --approve
+  codefoldersync acceptance receive-backup-artifact --spec <path> --artifact <archive|manifest> --approve
+  codefoldersync acceptance receive-backup-witness --spec <path> --approve
+  codefoldersync acceptance finalize-backup-receipt --spec <path> --approve
+  codefoldersync acceptance generate-bounded-corpus --spec <path> --approve
   codefoldersync acceptance capture-backup --spec <path> --approve
+  codefoldersync acceptance capture-backup-stream --spec <path> --approve
   codefoldersync acceptance restore-master --spec <path> --approve
+  codefoldersync acceptance verify-restore-slot --spec <path> --approve
   codefoldersync acceptance pseudo-fleet-capacity --spec <path>
   codefoldersync acceptance pseudo-fleet --spec <path> --approve
   codefoldersync acceptance isolated-fleet-capacity --spec <path>

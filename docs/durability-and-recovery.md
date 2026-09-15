@@ -74,3 +74,7 @@ V3 does not automatically delete objects, event history, conflicts, plans, adopt
 ## Backup boundary
 
 The CLI requires a backup witness before source seal but does not itself prove the plan's Google Drive archives or Wootbook fixture masters exist. Operational acceptance must verify those external artifacts separately before a daily-driver seal.
+
+The production backup path streams `tar -> zstd -> age` from the source into a Wootbook receipt command. Source and receiver compute independent ciphertext byte counts and SHA-256 values. Wootbook finalizes a bundle only when both artifact receipts match the source witness. The source keeps no full ciphertext file and no plaintext archive exists.
+
+Real recovery uses one sentinel-qualified Wootbook slot. A restore verifies ciphertext, portable semantics, Git state, and same-platform metadata where applicable, then deletes the downloaded bundle and protected master together. The age identity is outside the disposable slot. Drive snapshots, adoption recovery, V2 evidence, and active product state are never automatic cleanup targets.
