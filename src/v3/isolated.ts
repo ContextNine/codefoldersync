@@ -54,6 +54,11 @@ import { ProcessDistributedExecutor } from "./distributed-process.js";
 import { verifyFullV3 } from "./engine.js";
 import { ObjectStore, parseManifest } from "./objects.js";
 import { LocalState } from "./state.js";
+import {
+  cleanupRunRoot,
+  storageLimits,
+  type StorageProfile,
+} from "./storage.js";
 import { HubTransport } from "./transport.js";
 import type { NamespaceManifest, ServiceStatus, SyncSummary } from "./types.js";
 import type { VisibilityEvent, VisibilityObserverSpec } from "./visibility.js";
@@ -67,6 +72,10 @@ export interface IsolatedMachineSpec {
   readonly runRoot: string;
   readonly masterRoot: string;
   readonly masterWitness: TreeWitness;
+  readonly storageProfile: Extract<
+    StorageProfile,
+    "mac-transient" | "wootbook-acceptance"
+  >;
 }
 
 export interface IsolatedFleetAcceptanceSpec {
@@ -78,6 +87,7 @@ export interface IsolatedFleetAcceptanceSpec {
   readonly expectedReleaseSha256: string;
   readonly backupWitness: string;
   readonly controllerStateDir: string;
+  readonly evidenceDirectory: string;
   readonly sourceMachineId: string;
   readonly targetOrder: readonly string[];
   readonly hubMachineId: string;
@@ -152,6 +162,7 @@ export interface IsolatedMachineCapacityEstimate extends IsolatedMachineCapacity
   readonly recoveryBytesPerRepetition: number;
   readonly projectedBytesPerRepetition: number;
   readonly requiredBytes: number;
+  readonly storageLimitBytes: number;
   readonly reserveFactor: 1.25;
   readonly passed: boolean;
 }
@@ -164,6 +175,11 @@ export interface IsolatedFleetCapacityEstimate {
 }
 
 type IsolatedAgentRequest =
+  | {
+      readonly action: "cleanup";
+      readonly repetitionId: string;
+      readonly repetitionRoot: string;
+    }
   | {
       readonly action: "ssh-matrix";
       readonly expectedVersion: string;
@@ -260,6 +276,14 @@ export async function runIsolatedAgent(request: unknown): Promise<unknown> {
       return prepareMachine(input);
     case "capacity":
       return measureIsolatedMachineCapacity(input);
+    case "cleanup":
+      if (!existsSync(input.repetitionRoot))
+        return { removed: false, passed: true } as const;
+      return cleanupRunRoot({
+        schemaVersion: 1,
+        runId: input.repetitionId,
+        runRoot: input.repetitionRoot,
+      });
     case "ai-writer":
       assertRunBoundary(
         input.repetitionId,
@@ -430,7 +454,7 @@ export async function runIsolatedFleetAcceptanceV3(
       .filter((entry) => !entry.passed)
       .map(
         (entry) =>
-          `${entry.machineId} requires ${entry.requiredBytes} bytes and has ${entry.availableBytes}`,
+          `${entry.machineId} requires ${entry.requiredBytes} bytes, has ${entry.availableBytes}, and permits ${entry.storageLimitBytes}`,
       )
       .join("; ");
     throw new Error(
@@ -446,204 +470,212 @@ export async function runIsolatedFleetAcceptanceV3(
   let cassetteRepetitionId: string | null = null;
   let cassetteRepetitionRoot: string | null = null;
   let acceptedAi: AiWriterResult | null = null;
-  for (let repetition = 1; repetition <= spec.repetitions; repetition += 1) {
-    const repetitionId = `${spec.runId}-${spec.scenarioId}-${String(repetition).padStart(2, "0")}`;
-    const layouts = new Map(
-      spec.machines.map((entry) => [
-        entry.machineId,
-        machineLayout(spec, entry, repetitionId),
-      ]),
-    );
-    await Promise.all(
-      spec.machines.map(async (entry) => {
-        const layout = requiredLayout(layouts, entry.machineId);
-        await callIsolatedAgent(entry, {
-          action: "prepare",
-          machineId: entry.machineId,
-          baseRunId: spec.runId,
-          repetitionId,
-          baseRunRoot: entry.runRoot,
-          repetitionRoot: layout.repetitionRoot,
-          workspace: layout.workspace,
-          masterRoot: entry.masterRoot,
-          masterWitness: entry.masterWitness,
-          aiWorkspace: layout.aiWorkspace,
-          createAiWorkspace: entry.machineId === spec.sourceMachineId,
-        });
-      }),
-    );
-    const distributed = distributedSpec(
-      spec,
-      repetitionId,
-      source,
-      hub,
-      targets,
-      layouts,
-    );
-    const prepared = await prepareDistributedSetupV3(distributed, executor);
-    for (const target of prepared.targets) {
-      if (target.adoptionId === null)
-        throw new Error("Isolated target adoption ID is missing");
-      await applyDistributedTargetV3(
-        distributed,
-        executor,
-        target.machineId,
-        target.adoptionId,
+  const preparedRuns: {
+    readonly repetitionId: string;
+    readonly layouts: ReadonlyMap<string, MachineLayout>;
+  }[] = [];
+  try {
+    for (let repetition = 1; repetition <= spec.repetitions; repetition += 1) {
+      const repetitionId = `${spec.runId}-${spec.scenarioId}-${String(repetition).padStart(2, "0")}`;
+      const layouts = new Map(
+        spec.machines.map((entry) => [
+          entry.machineId,
+          machineLayout(spec, entry, repetitionId),
+        ]),
       );
-    }
-    await cutoverDistributedAcceptanceV3(distributed, executor);
-    await installAndStartServices(spec, repetitionId, layouts);
+      preparedRuns.push({ repetitionId, layouts });
+      await prepareIsolatedMachines(spec, repetitionId, layouts);
+      const distributed = distributedSpec(
+        spec,
+        repetitionId,
+        source,
+        hub,
+        targets,
+        layouts,
+      );
+      const prepared = await prepareDistributedSetupV3(distributed, executor);
+      for (const target of prepared.targets) {
+        if (target.adoptionId === null)
+          throw new Error("Isolated target adoption ID is missing");
+        await applyDistributedTargetV3(
+          distributed,
+          executor,
+          target.machineId,
+          target.adoptionId,
+        );
+      }
+      await cutoverDistributedAcceptanceV3(distributed, executor);
+      await installAndStartServices(spec, repetitionId, layouts);
 
-    const controllerStarted = performance.now();
-    const workspaceObservers = new Map<
-      string,
-      JsonLineProcess<VisibilityEvent>
-    >();
-    let hubObserver: JsonLineProcess<HubVisibilityEvent> | null = null;
-    try {
-      for (const entry of spec.machines) {
-        const layout = requiredLayout(layouts, entry.machineId);
-        const observer = startJsonLineProcess<VisibilityEvent>(
-          entry,
-          "visibility-agent",
+      const controllerStarted = performance.now();
+      const workspaceObservers = new Map<
+        string,
+        JsonLineProcess<VisibilityEvent>
+      >();
+      let hubObserver: JsonLineProcess<HubVisibilityEvent> | null = null;
+      try {
+        for (const entry of spec.machines) {
+          const layout = requiredLayout(layouts, entry.machineId);
+          const observer = startJsonLineProcess<VisibilityEvent>(
+            entry,
+            "visibility-agent",
+            {
+              schemaVersion: 1,
+              runId: repetitionId,
+              allowedRunRoot: layout.repetitionRoot,
+              workspace: layout.aiWorkspace,
+              pollIntervalMs: spec.observerPollIntervalMs,
+              timeoutMs: spec.timeoutMs,
+            } satisfies VisibilityObserverSpec,
+            controllerStarted,
+          );
+          workspaceObservers.set(entry.machineId, observer);
+        }
+        const hubLayout = requiredLayout(layouts, hub.machineId);
+        hubObserver = startJsonLineProcess<HubVisibilityEvent>(
+          hub,
+          "hub-visibility-agent",
           {
             schemaVersion: 1,
-            runId: repetitionId,
-            allowedRunRoot: layout.repetitionRoot,
-            workspace: layout.aiWorkspace,
+            repetitionId,
+            repetitionRoot: hubLayout.repetitionRoot,
+            configPath: hubLayout.configPath,
+            workspace: hubLayout.aiWorkspace,
             pollIntervalMs: spec.observerPollIntervalMs,
             timeoutMs: spec.timeoutMs,
-          } satisfies VisibilityObserverSpec,
+          } satisfies HubVisibilityObserverSpec,
           controllerStarted,
         );
-        workspaceObservers.set(entry.machineId, observer);
-      }
-      const hubLayout = requiredLayout(layouts, hub.machineId);
-      hubObserver = startJsonLineProcess<HubVisibilityEvent>(
-        hub,
-        "hub-visibility-agent",
-        {
-          schemaVersion: 1,
-          repetitionId,
-          repetitionRoot: hubLayout.repetitionRoot,
-          configPath: hubLayout.configPath,
-          workspace: hubLayout.aiWorkspace,
-          pollIntervalMs: spec.observerPollIntervalMs,
-          timeoutMs: spec.timeoutMs,
-        } satisfies HubVisibilityObserverSpec,
-        controllerStarted,
-      );
-      await Promise.all([
-        ...[...workspaceObservers.values()].map((observer) =>
-          observer.waitFor((event) => event.kind === "ready", spec.timeoutMs),
-        ),
-        hubObserver.waitFor((event) => event.kind === "ready", spec.timeoutMs),
-      ]);
-      const sourceLayout = requiredLayout(layouts, source.machineId);
-      const writerStartedMs = elapsed(controllerStarted);
-      let writer: AiWriterResult;
-      if (repetition === 1) {
-        writer = aiWriterResult(
+        await Promise.all([
+          ...[...workspaceObservers.values()].map((observer) =>
+            observer.waitFor((event) => event.kind === "ready", spec.timeoutMs),
+          ),
+          hubObserver.waitFor(
+            (event) => event.kind === "ready",
+            spec.timeoutMs,
+          ),
+        ]);
+        const sourceLayout = requiredLayout(layouts, source.machineId);
+        const writerStartedMs = elapsed(controllerStarted);
+        let writer: AiWriterResult;
+        if (repetition === 1) {
+          writer = aiWriterResult(
+            await callIsolatedAgent(source, {
+              action: "ai-writer",
+              repetitionId,
+              repetitionRoot: sourceLayout.repetitionRoot,
+              workspace: sourceLayout.aiWorkspace,
+              privateEvidenceDir: sourceLayout.privateEvidenceDir,
+              command: spec.aiWriterCommand,
+              modelId: spec.aiModelId,
+              prompt: spec.aiPrompt,
+              timeoutMs: spec.timeoutMs,
+              pollIntervalMs: spec.observerPollIntervalMs,
+            }),
+          );
+          acceptedAi = writer;
+          cassettePath = join(
+            sourceLayout.privateEvidenceDir,
+            "ai-mutation-cassette.json",
+          );
+          cassetteRepetitionId = repetitionId;
+          cassetteRepetitionRoot = sourceLayout.repetitionRoot;
+        } else {
+          if (
+            cassettePath === null ||
+            cassetteRepetitionId === null ||
+            cassetteRepetitionRoot === null ||
+            acceptedAi === null
+          )
+            throw new Error("AI mutation cassette is missing for replay");
           await callIsolatedAgent(source, {
-            action: "ai-writer",
+            action: "ai-replay",
             repetitionId,
             repetitionRoot: sourceLayout.repetitionRoot,
             workspace: sourceLayout.aiWorkspace,
-            privateEvidenceDir: sourceLayout.privateEvidenceDir,
-            command: spec.aiWriterCommand,
-            modelId: spec.aiModelId,
-            prompt: spec.aiPrompt,
-            timeoutMs: spec.timeoutMs,
-            pollIntervalMs: spec.observerPollIntervalMs,
-          }),
+            cassettePath,
+            cassetteRepetitionId,
+            cassetteRepetitionRoot,
+          });
+          writer = {
+            ...acceptedAi,
+            writerDurationMs: elapsed(controllerStarted) - writerStartedMs,
+            firstChangeMs: 0,
+            lastChangeMs: 0,
+          };
+        }
+        const writerCompletedMs = elapsed(controllerStarted);
+        const convergence = await waitForConvergence(
+          spec,
+          writer,
+          source.machineId,
+          targets.map((entry) => entry.machineId),
+          workspaceObservers,
+          hubObserver,
+          writerStartedMs,
+          writerCompletedMs,
         );
-        acceptedAi = writer;
-        cassettePath = join(
-          sourceLayout.privateEvidenceDir,
-          "ai-mutation-cassette.json",
-        );
-        cassetteRepetitionId = repetitionId;
-        cassetteRepetitionRoot = sourceLayout.repetitionRoot;
-      } else {
-        if (
-          cassettePath === null ||
-          cassetteRepetitionId === null ||
-          cassetteRepetitionRoot === null ||
-          acceptedAi === null
-        )
-          throw new Error("AI mutation cassette is missing for replay");
-        await callIsolatedAgent(source, {
-          action: "ai-replay",
+        const semantic = await verifySemantics(spec, repetitionId, layouts);
+        await restartAndVerifyServices(spec, repetitionId, layouts);
+        const services = await stopAndUninstallServices(
+          spec,
           repetitionId,
-          repetitionRoot: sourceLayout.repetitionRoot,
-          workspace: sourceLayout.aiWorkspace,
-          cassettePath,
-          cassetteRepetitionId,
-          cassetteRepetitionRoot,
-        });
-        writer = {
-          ...acceptedAi,
-          writerDurationMs: elapsed(controllerStarted) - writerStartedMs,
-          firstChangeMs: 0,
-          lastChangeMs: 0,
+          layouts,
+        );
+        await verifyPreparedMasters(spec, repetitionId, layouts);
+        const result: IsolatedFleetRunResult = {
+          repetition,
+          mode: repetition === 1 ? "real-model" : "cassette-replay",
+          modelId: writer.modelId,
+          promptDigest: writer.promptDigest,
+          initialDigest: writer.initialDigest,
+          finalDigest: writer.finalDigest,
+          cassetteDigest: writer.cassetteDigest,
+          semanticDigest: semantic,
+          changedCodeFiles: writer.changedCodeFiles,
+          changedDirectories: writer.changedDirectories,
+          timings: {
+            writerDurationMs: milliseconds(writerCompletedMs - writerStartedMs),
+            ...convergence,
+          },
+          services,
+          passed: true,
         };
+        atomicPrivateJson(
+          join(
+            spec.controllerStateDir,
+            repetitionId,
+            "controller",
+            "result.json",
+          ),
+          result,
+        );
+        results.push(result);
+      } finally {
+        for (const observer of workspaceObservers.values())
+          await observer.stop();
+        if (hubObserver !== null) await hubObserver.stop();
+        await stopServicesBestEffort(spec, repetitionId, layouts);
       }
-      const writerCompletedMs = elapsed(controllerStarted);
-      const convergence = await waitForConvergence(
-        spec,
-        writer,
-        source.machineId,
-        targets.map((entry) => entry.machineId),
-        workspaceObservers,
-        hubObserver,
-        writerStartedMs,
-        writerCompletedMs,
-      );
-      const semantic = await verifySemantics(spec, repetitionId, layouts);
-      await restartAndVerifyServices(spec, repetitionId, layouts);
-      const services = await stopAndUninstallServices(
-        spec,
-        repetitionId,
-        layouts,
-      );
-      await verifyPreparedMasters(spec, repetitionId, layouts);
-      const result: IsolatedFleetRunResult = {
-        repetition,
-        mode: repetition === 1 ? "real-model" : "cassette-replay",
-        modelId: writer.modelId,
-        promptDigest: writer.promptDigest,
-        initialDigest: writer.initialDigest,
-        finalDigest: writer.finalDigest,
-        cassetteDigest: writer.cassetteDigest,
-        semanticDigest: semantic,
-        changedCodeFiles: writer.changedCodeFiles,
-        changedDirectories: writer.changedDirectories,
-        timings: {
-          writerDurationMs: milliseconds(writerCompletedMs - writerStartedMs),
-          ...convergence,
-        },
-        services,
-        passed: true,
-      };
-      atomicPrivateJson(
-        join(
-          spec.controllerStateDir,
-          repetitionId,
-          "controller",
-          "result.json",
-        ),
-        result,
-      );
-      results.push(result);
-    } finally {
-      for (const observer of workspaceObservers.values()) await observer.stop();
-      if (hubObserver !== null) await hubObserver.stop();
-      await stopServicesBestEffort(spec, repetitionId, layouts);
     }
+    if (results[0]?.finalDigest !== results[1]?.finalDigest)
+      throw new Error("AI replay final digest differs from the real model run");
+    await cleanupIsolatedRuns(spec, preparedRuns);
+    writeIsolatedEvidence(spec, results);
+    return results;
+  } catch (error) {
+    let failure: unknown = error;
+    try {
+      await cleanupIsolatedRuns(spec, preparedRuns);
+    } catch (cleanupError) {
+      failure = new AggregateError(
+        [error, cleanupError],
+        "Isolated acceptance and exact cleanup both failed",
+      );
+    }
+    writeIsolatedFailure(spec);
+    throw failure;
   }
-  if (results[0]?.finalDigest !== results[1]?.finalDigest)
-    throw new Error("AI replay final digest differs from the real model run");
-  return results;
 }
 
 export async function estimateIsolatedFleetCapacityV3(
@@ -712,6 +744,10 @@ export function projectIsolatedFleetCapacityV3(
     const requiredBytes = Math.ceil(
       projectedBytesPerRepetition * spec.repetitions * reserveFactor,
     );
+    const storageLimitBytes =
+      machineSpec.storageProfile === "mac-transient"
+        ? storageLimits.macTransientBytes
+        : storageLimits.wootbookTargetBytes;
     return {
       ...observation,
       localObjectStoreBytesPerRepetition,
@@ -719,8 +755,11 @@ export function projectIsolatedFleetCapacityV3(
       recoveryBytesPerRepetition,
       projectedBytesPerRepetition,
       requiredBytes,
+      storageLimitBytes,
       reserveFactor,
-      passed: observation.availableBytes >= requiredBytes,
+      passed:
+        observation.availableBytes >= requiredBytes &&
+        requiredBytes <= storageLimitBytes,
     } satisfies IsolatedMachineCapacityEstimate;
   });
   return {
@@ -1085,6 +1124,39 @@ async function installAndStartServices(
   }
 }
 
+async function prepareIsolatedMachines(
+  spec: IsolatedFleetAcceptanceSpec,
+  repetitionId: string,
+  layouts: ReadonlyMap<string, MachineLayout>,
+): Promise<void> {
+  const attempts = await Promise.allSettled(
+    spec.machines.map(async (entry) => {
+      const layout = requiredLayout(layouts, entry.machineId);
+      await callIsolatedAgent(entry, {
+        action: "prepare",
+        machineId: entry.machineId,
+        baseRunId: spec.runId,
+        repetitionId,
+        baseRunRoot: entry.runRoot,
+        repetitionRoot: layout.repetitionRoot,
+        workspace: layout.workspace,
+        masterRoot: entry.masterRoot,
+        masterWitness: entry.masterWitness,
+        aiWorkspace: layout.aiWorkspace,
+        createAiWorkspace: entry.machineId === spec.sourceMachineId,
+      });
+    }),
+  );
+  const failures = attempts.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0)
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      `Isolated preparation failed on ${failures.length} machines`,
+    );
+}
+
 async function restartAndVerifyServices(
   spec: IsolatedFleetAcceptanceSpec,
   repetitionId: string,
@@ -1171,6 +1243,35 @@ async function stopServicesBestEffort(
       () => undefined,
     );
   }
+}
+
+async function cleanupIsolatedRuns(
+  spec: IsolatedFleetAcceptanceSpec,
+  runs: readonly {
+    readonly repetitionId: string;
+    readonly layouts: ReadonlyMap<string, MachineLayout>;
+  }[],
+): Promise<void> {
+  const attempts = await Promise.allSettled(
+    runs.flatMap(({ repetitionId, layouts }) =>
+      spec.machines.map((entry) => {
+        const layout = requiredLayout(layouts, entry.machineId);
+        return callIsolatedAgent(entry, {
+          action: "cleanup",
+          repetitionId,
+          repetitionRoot: layout.repetitionRoot,
+        });
+      }),
+    ),
+  );
+  const failures = attempts.filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failures.length > 0)
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      `Exact isolated cleanup failed for ${failures.length} run roots`,
+    );
 }
 
 async function verifySshMatrix(
@@ -1591,8 +1692,19 @@ function validateIsolatedSpec(spec: IsolatedFleetAcceptanceSpec): void {
   safeId(spec.aiWorkspaceName, "AI workspace name");
   if (!/^[a-f0-9]{64}$/u.test(spec.expectedReleaseSha256))
     throw new Error("Isolated expected release SHA-256 is invalid");
-  if (!isAbsolute(spec.controllerStateDir))
-    throw new Error("Isolated controller state must be absolute");
+  if (
+    !isAbsolute(spec.controllerStateDir) ||
+    !isAbsolute(spec.evidenceDirectory)
+  )
+    throw new Error("Isolated controller state and evidence must be absolute");
+  const controllerStateDir = resolve(spec.controllerStateDir);
+  const evidenceDirectory = resolve(spec.evidenceDirectory);
+  if (dirname(evidenceDirectory) !== controllerStateDir)
+    throw new Error(
+      "Isolated evidence must be a direct child of controller state",
+    );
+  if (existsSync(evidenceDirectory))
+    throw new Error("Isolated evidence directory exists");
   if (spec.machines.length !== 3)
     throw new Error("Isolated acceptance requires exactly three machines");
   if (spec.targetOrder.length !== 2)
@@ -1647,6 +1759,11 @@ function validateIsolatedSpec(spec: IsolatedFleetAcceptanceSpec): void {
       throw new Error("Isolated machine command must be absolute");
     if (!/^[A-Za-z0-9_.@:-]+$/u.test(entry.sshAlias))
       throw new Error("Isolated canonical SSH alias is invalid");
+    if (
+      entry.storageProfile !== "mac-transient" &&
+      entry.storageProfile !== "wootbook-acceptance"
+    )
+      throw new Error("Isolated machine storage profile is invalid");
     if (entry.endpoint.kind === "ssh") {
       if (entry.endpoint.sshAlias !== entry.sshAlias)
         throw new Error("Isolated SSH alias is invalid");
@@ -1685,6 +1802,7 @@ function isolatedAgentRequest(value: unknown): IsolatedAgentRequest {
     action !== "ai-writer" &&
     action !== "ai-replay" &&
     action !== "capacity" &&
+    action !== "cleanup" &&
     action !== "service" &&
     action !== "semantic" &&
     action !== "verify"
@@ -1741,6 +1859,42 @@ function atomicPrivateJson(path: string, value: unknown): void {
   });
   renameSync(temporary, path);
   chmodSync(path, 0o600);
+}
+
+function writeIsolatedEvidence(
+  spec: IsolatedFleetAcceptanceSpec,
+  results: readonly IsolatedFleetRunResult[],
+): void {
+  const directory = prepareIsolatedEvidenceDirectory(spec.evidenceDirectory);
+  atomicPrivateJson(join(directory, "result.json"), {
+    schemaVersion: 1,
+    runId: spec.runId,
+    scenarioId: spec.scenarioId,
+    repetitions: results,
+    passed: true,
+  });
+}
+
+function writeIsolatedFailure(spec: IsolatedFleetAcceptanceSpec): void {
+  const directory = existsSync(spec.evidenceDirectory)
+    ? resolve(spec.evidenceDirectory)
+    : prepareIsolatedEvidenceDirectory(spec.evidenceDirectory);
+  const path = join(directory, "failure.json");
+  if (!existsSync(path))
+    atomicPrivateJson(path, {
+      schemaVersion: 1,
+      runId: spec.runId,
+      scenarioId: spec.scenarioId,
+      passed: false,
+    });
+}
+
+function prepareIsolatedEvidenceDirectory(path: string): string {
+  const directory = resolve(path);
+  if (existsSync(directory))
+    throw new Error("Isolated evidence directory exists");
+  mkdirSync(directory, { mode: 0o700 });
+  return directory;
 }
 
 function machine(

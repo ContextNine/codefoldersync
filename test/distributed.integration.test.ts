@@ -262,6 +262,8 @@ test("isolated preparation copies a witnessed master into a fresh sentinel root"
       runRoot,
       masterRoot: master,
       masterWitness: witness,
+      storageProfile:
+        machineId === "wootbook" ? "wootbook-acceptance" : "mac-transient",
     });
     const capacitySpec: IsolatedFleetAcceptanceSpec = {
       schemaVersion: 1,
@@ -272,6 +274,7 @@ test("isolated preparation copies a witnessed master into a fresh sentinel root"
       expectedReleaseSha256: "e".repeat(64),
       backupWitness: "capacity-test",
       controllerStateDir: runRoot,
+      evidenceDirectory: join(runRoot, "capacity-evidence"),
       sourceMachineId: "mattbook",
       targetOrder: ["wootbook", "workermacair"],
       hubMachineId: "wootbook",
@@ -357,6 +360,18 @@ test("isolated preparation copies a witnessed master into a fresh sentinel root"
       existsSync(join(targetWorkspace, "codefoldersync-ai-workload")),
       false,
     );
+    await runIsolatedAgent({
+      action: "cleanup",
+      repetitionId,
+      repetitionRoot,
+    });
+    await runIsolatedAgent({
+      action: "cleanup",
+      repetitionId: targetRepetitionId,
+      repetitionRoot: targetRepetitionRoot,
+    });
+    assert.equal(existsSync(repetitionRoot), false);
+    assert.equal(existsSync(targetRepetitionRoot), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -986,7 +1001,8 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
   const releaseSha256 = "c".repeat(64);
   try {
     const binary = installBinary(base, releaseSha256);
-    const runRoot = join(base, "run");
+    const runRoot = join(base, "run-pseudo-fleet");
+    const evidenceDirectory = join(base, "pseudo-fleet-evidence");
     mkdirSync(runRoot, { mode: 0o700 });
     writeFileSync(join(runRoot, "SENTINEL"), `${runId}\n`, {
       encoding: "utf8",
@@ -1011,6 +1027,7 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
       seed: "fixed-realistic-seed",
       repetitions: 2,
       runRoot,
+      evidenceDirectory,
       expectedVersion: "0.3.0",
       expectedReleaseSha256: releaseSha256,
       command: [binary],
@@ -1038,18 +1055,35 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
     assert.equal(results[0]?.workload.files, 64);
     assert.equal(results[1]?.workload.directories, 8);
     assert.notEqual(results[0]?.sourceDigest, "");
-    assert.equal(
-      existsSync(
-        join(runRoot, "realistic-replay-01", "evidence", "result.json"),
-      ),
-      true,
+    assert.equal(existsSync(runRoot), false);
+    assert.equal(existsSync(join(evidenceDirectory, "result.json")), true);
+
+    const failedRunRoot = join(base, "run-pseudo-fleet-failure");
+    const failedEvidence = join(base, "pseudo-fleet-failure-evidence");
+    mkdirSync(failedRunRoot, { mode: 0o700 });
+    writeFileSync(join(failedRunRoot, "SENTINEL"), `${runId}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    await assert.rejects(
+      runPseudoFleetAcceptanceV3({
+        ...spec,
+        runRoot: failedRunRoot,
+        evidenceDirectory: failedEvidence,
+        masters: spec.masters.map((master, index) =>
+          index === 0
+            ? {
+                ...master,
+                witness: { ...master.witness, digest: "f".repeat(64) },
+              }
+            : master,
+        ),
+      }),
+      /Master witness mismatch/u,
     );
-    assert.equal(
-      existsSync(
-        join(runRoot, "realistic-replay-02", "evidence", "result.json"),
-      ),
-      true,
-    );
+    assert.equal(existsSync(failedRunRoot), false);
+    assert.equal(existsSync(join(failedEvidence, "failure.json")), true);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

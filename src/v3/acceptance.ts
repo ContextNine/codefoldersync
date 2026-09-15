@@ -30,6 +30,11 @@ import { compileIgnore, defaultIgnore } from "./ignore.js";
 import { ObjectStore } from "./objects.js";
 import { LocalState } from "./state.js";
 import type { ProductConfig } from "./types.js";
+import {
+  checkStorageBudget,
+  cleanupRunRoot,
+  inspectPhysicalTree,
+} from "./storage.js";
 
 export interface TreeWitness {
   readonly schemaVersion: 1;
@@ -54,6 +59,7 @@ export interface PseudoFleetAcceptanceSpec {
   readonly seed: string;
   readonly repetitions: 2;
   readonly runRoot: string;
+  readonly evidenceDirectory: string;
   readonly expectedVersion: string;
   readonly expectedReleaseSha256: string;
   readonly command: readonly string[];
@@ -186,25 +192,46 @@ export async function runPseudoFleetAcceptanceV3(
 ): Promise<readonly PseudoFleetRunResult[]> {
   validatePseudoFleetSpec(spec);
   assertSentinel(spec.runRoot, spec.runId);
-  const capacity = estimatePseudoFleetCapacityV3(spec);
-  if (!capacity.passed)
-    throw new Error(
-      `Pseudo-fleet lacks its two-run copy, object, recovery, and 25 percent reserve: required ${capacity.requiredBytes}, available ${capacity.availableBytes}`,
-    );
-  for (const master of spec.masters) {
-    const witness = await createTreeWitness(master.root);
-    if (canonicalJson(witness) !== canonicalJson(master.witness))
-      throw new Error(`Master witness mismatch: ${master.machineId}`);
+  try {
+    const capacity = estimatePseudoFleetCapacityV3(spec);
+    if (!capacity.passed)
+      throw new Error(
+        `Pseudo-fleet lacks its two-run copy, object, recovery, and 25 percent reserve: required ${capacity.requiredBytes}, available ${capacity.availableBytes}`,
+      );
+    const runInventory = inspectPhysicalTree(spec.runRoot);
+    checkStorageBudget({
+      profile: "wootbook-acceptance",
+      inventory: runInventory,
+      baselineAllocatedBytes: runInventory.allocatedBytes,
+      projectedAdditionalBytes: capacity.requiredBytes,
+    });
+    for (const master of spec.masters) {
+      const witness = await createTreeWitness(master.root);
+      if (canonicalJson(witness) !== canonicalJson(master.witness))
+        throw new Error(`Master witness mismatch: ${master.machineId}`);
+    }
+    const results: PseudoFleetRunResult[] = [];
+    for (let repetition = 1; repetition <= spec.repetitions; repetition += 1)
+      results.push(await runPseudoFleetRepetition(spec, repetition));
+    for (const master of spec.masters) {
+      const witness = await createTreeWitness(master.root);
+      if (canonicalJson(witness) !== canonicalJson(master.witness))
+        throw new Error(
+          `Master changed during acceptance: ${master.machineId}`,
+        );
+    }
+    writeBoundedEvidence(spec, results);
+    return results;
+  } catch (error) {
+    writeBoundedFailure(spec);
+    throw error;
+  } finally {
+    cleanupRunRoot({
+      schemaVersion: 1,
+      runId: spec.runId,
+      runRoot: spec.runRoot,
+    });
   }
-  const results: PseudoFleetRunResult[] = [];
-  for (let repetition = 1; repetition <= spec.repetitions; repetition += 1)
-    results.push(await runPseudoFleetRepetition(spec, repetition));
-  for (const master of spec.masters) {
-    const witness = await createTreeWitness(master.root);
-    if (canonicalJson(witness) !== canonicalJson(master.witness))
-      throw new Error(`Master changed during acceptance: ${master.machineId}`);
-  }
-  return results;
 }
 
 export function estimatePseudoFleetCapacityV3(
@@ -513,6 +540,53 @@ function writeResult(root: string, result: PseudoFleetRunResult): void {
   chmodSync(path, 0o600);
 }
 
+function writeBoundedEvidence(
+  spec: PseudoFleetAcceptanceSpec,
+  results: readonly PseudoFleetRunResult[],
+): void {
+  const directory = prepareEvidenceDirectory(spec.evidenceDirectory);
+  writeFileSync(
+    join(directory, "result.json"),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      runId: spec.runId,
+      scenarioId: spec.scenarioId,
+      repetitions: results,
+      passed: true,
+    })}\n`,
+    { encoding: "utf8", flag: "wx", mode: 0o600 },
+  );
+}
+
+function writeBoundedFailure(spec: PseudoFleetAcceptanceSpec): void {
+  const directory = existsSync(spec.evidenceDirectory)
+    ? resolve(spec.evidenceDirectory)
+    : prepareEvidenceDirectory(spec.evidenceDirectory);
+  const path = join(directory, "failure.json");
+  if (!existsSync(path))
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        runId: spec.runId,
+        scenarioId: spec.scenarioId,
+        passed: false,
+      })}\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
+}
+
+function prepareEvidenceDirectory(path: string): string {
+  const directory = resolve(path);
+  if (existsSync(directory))
+    throw new Error("Pseudo-fleet evidence directory exists");
+  const parent = lstatSync(resolve(directory, ".."));
+  if (!parent.isDirectory() || parent.isSymbolicLink())
+    throw new Error("Pseudo-fleet evidence parent must be physical");
+  mkdirSync(directory, { mode: 0o700 });
+  return directory;
+}
+
 async function fileDigest(path: string): Promise<string> {
   const hash = createHash("sha256");
   await new Promise<void>((resolvePromise, reject) => {
@@ -563,8 +637,18 @@ function validatePseudoFleetSpec(spec: PseudoFleetAcceptanceSpec): void {
   ] as const)
     if (value.trim().length === 0)
       throw new Error(`Pseudo-fleet ${name} is empty`);
-  if (!isAbsolute(spec.runRoot))
-    throw new Error("Pseudo-fleet run root must be absolute");
+  if (!isAbsolute(spec.runRoot) || !isAbsolute(spec.evidenceDirectory))
+    throw new Error("Pseudo-fleet run and evidence roots must be absolute");
+  const runRoot = resolve(spec.runRoot);
+  const evidenceDirectory = resolve(spec.evidenceDirectory);
+  if (
+    evidenceDirectory === runRoot ||
+    evidenceDirectory.startsWith(`${runRoot}${sep}`) ||
+    runRoot.startsWith(`${evidenceDirectory}${sep}`)
+  )
+    throw new Error("Pseudo-fleet evidence must stay outside the run root");
+  if (existsSync(evidenceDirectory))
+    throw new Error("Pseudo-fleet evidence directory exists");
   if (!/^[a-f0-9]{64}$/u.test(spec.expectedReleaseSha256))
     throw new Error("Pseudo-fleet release SHA-256 is invalid");
   if (spec.command.length === 0)
@@ -587,7 +671,6 @@ function validatePseudoFleetSpec(spec: PseudoFleetAcceptanceSpec): void {
       throw new Error(
         `Pseudo-fleet master root must be absolute: ${master.machineId}`,
       );
-    const runRoot = resolve(spec.runRoot);
     const masterRoot = resolve(master.root);
     if (masterRoot === runRoot || masterRoot.startsWith(`${runRoot}${sep}`))
       throw new Error("Pseudo-fleet masters must stay outside the run root");
