@@ -3,6 +3,7 @@
 import {
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -108,6 +109,7 @@ import {
 } from "./v3/receipt.js";
 import { generateBoundedCorpus, readBoundedCorpusSpec } from "./v3/corpus.js";
 import { watchIncludedNamespace } from "./v3/watcher.js";
+import { refreshGitCheckout } from "./v3/git-refresh.js";
 import {
   createTreeWitness,
   estimatePseudoFleetCapacityV3,
@@ -174,6 +176,9 @@ async function main(): Promise<void> {
       return;
     case "sync":
       await runSync(args);
+      return;
+    case "git-refresh":
+      await runGitRefresh(args);
       return;
     case "verify":
       await runVerify(args);
@@ -500,6 +505,22 @@ async function runSync(commandArgs: readonly string[]): Promise<void> {
     process.exitCode = 1;
 }
 
+async function runGitRefresh(commandArgs: readonly string[]): Promise<void> {
+  const config = load(commandArgs);
+  if (config.lifecycle !== "normal")
+    throw new Error("Git refresh requires normal CodeFolderSync operation");
+  const result = await withWriterLock(config, () =>
+    refreshGitCheckout({
+      root: config.root,
+      checkout: requiredOption(commandArgs, "--checkout"),
+      expectedRemote: requiredOption(commandArgs, "--remote"),
+      defaultBranch: requiredOption(commandArgs, "--branch"),
+      publishedCommit: requiredOption(commandArgs, "--commit"),
+    }),
+  );
+  printJson(result);
+}
+
 async function runVerify(commandArgs: readonly string[]): Promise<void> {
   if (!flag(commandArgs, "--full"))
     throw new Error("V3 verification requires --full");
@@ -690,7 +711,7 @@ async function runDaemon(commandArgs: readonly string[]): Promise<void> {
           () => undefined,
         );
         const syncGeneration = changeGeneration;
-        const result = await syncFolderV3(config);
+        const result = await withWriterLock(config, () => syncFolderV3(config));
         process.stdout.write(
           `${JSON.stringify({ at: new Date().toISOString(), ...result })}\n`,
         );
@@ -993,8 +1014,11 @@ function byteCountOption(commandArgs: readonly string[], name: string): number {
   return parsed;
 }
 
-function acquireDaemonLock(config: ProductConfig): () => void {
-  const path = join(config.stateDir, "daemon.lock");
+function tryAcquireProcessLock(
+  config: ProductConfig,
+  name: "daemon" | "writer",
+): (() => void) | null {
+  const path = join(config.stateDir, `${name}.lock`);
   try {
     const descriptor = openSync(path, "wx", 0o600);
     writeFileSync(
@@ -1004,24 +1028,60 @@ function acquireDaemonLock(config: ProductConfig): () => void {
     closeSync(descriptor);
   } catch (error) {
     if (!existsSync(path)) throw error;
+    const details = lstatSync(path);
+    if (!details.isFile() || details.isSymbolicLink())
+      throw new Error(`Unsafe CodeFolderSync ${name} lock`);
     const current = JSON.parse(readFileSync(path, "utf8")) as {
       readonly pid?: unknown;
     };
     if (typeof current.pid === "number" && processExists(current.pid))
-      throw new Error(
-        `CodeFolderSync daemon is already running with PID ${current.pid}`,
-      );
+      return null;
     const recovery = join(
       config.stateDir,
       "apply-recovery",
-      `stale-daemon-lock-${Date.now()}`,
+      `stale-${name}-lock-${Date.now()}-${process.pid}`,
     );
-    renameSync(path, recovery);
-    return acquireDaemonLock(config);
+    try {
+      renameSync(path, recovery);
+    } catch (renameError) {
+      if (
+        renameError instanceof Error &&
+        "code" in renameError &&
+        renameError.code === "ENOENT"
+      )
+        return tryAcquireProcessLock(config, name);
+      throw renameError;
+    }
+    return tryAcquireProcessLock(config, name);
   }
   return () => {
     if (existsSync(path)) unlinkSync(path);
   };
+}
+
+function acquireDaemonLock(config: ProductConfig): () => void {
+  const release = tryAcquireProcessLock(config, "daemon");
+  if (release === null)
+    throw new Error("CodeFolderSync daemon is already running");
+  return release;
+}
+
+async function withWriterLock<T>(
+  config: ProductConfig,
+  action: () => Promise<T>,
+): Promise<T> {
+  const deadline = Date.now() + 120_000;
+  let release = tryAcquireProcessLock(config, "writer");
+  while (release === null && Date.now() < deadline) {
+    await delay(100);
+    release = tryAcquireProcessLock(config, "writer");
+  }
+  if (release === null) throw new Error("CodeFolderSync writer is busy");
+  try {
+    return await action();
+  } finally {
+    release();
+  }
 }
 
 async function withExclusiveWriter<T>(
@@ -1030,7 +1090,7 @@ async function withExclusiveWriter<T>(
 ): Promise<T> {
   const release = acquireDaemonLock(config);
   try {
-    return await action();
+    return await withWriterLock(config, action);
   } finally {
     release();
   }
@@ -1277,6 +1337,7 @@ Commands:
   codefoldersync adoption apply --adoption-id <id> [--config <path>]
   codefoldersync adoption cutover --approve [--config <path>]
   codefoldersync sync|status|doctor|conflicts|history [--config <path>]
+  codefoldersync git-refresh --checkout <relative-path> --remote <url> --branch <name> --commit <sha> [--config <path>]
   codefoldersync verify --full [--config <path>]
   codefoldersync config status [--config <path>]
   codefoldersync config update-ignore --previous-ignore <path> [--approve]

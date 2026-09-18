@@ -31,6 +31,14 @@ codefoldersync service logs
 
 `verify --full` rehashes all included files and Git boundaries. `offline` and `inconclusive` are failures. `conflict` means synchronization completed while retained explicit conflict evidence remains.
 
+An authorized local caller can request a targeted post-publication checkout refresh through CodeFolderSync:
+
+```bash
+codefoldersync git-refresh --checkout <relative-path> --remote <canonical-url> --branch <default-branch> --commit <published-sha>
+```
+
+This command uses the same short-lived writer lock as the daemon's sync pass. It fetches only the named branch and fast-forwards only an exact, contained Git checkout with the expected upstream, a clean worktree, and a published commit in the fetched history. It also skips an incoming path that would overwrite an ignored or otherwise untracked local file. It never stashes, resets, pushes, or creates a merge commit. A dirty, wrong-branch, wrong-repository, ahead, or divergent checkout returns a fixed skip reason. The caller must select an already registered checkout and supply a trusted canonical remote and publication commit; this command does not discover repositories or authorize requests. A stopped daemon is not required for the owner command to run.
+
 ## Ignore changes
 
 There is no target-side push/pull command. Preserve the prior accepted ignore file, change `.codefoldersyncignore` only on the authority, and preview the exact included/excluded entry and byte counts:
