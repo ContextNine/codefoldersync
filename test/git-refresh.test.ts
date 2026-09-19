@@ -14,16 +14,18 @@ import { join } from "node:path";
 import test from "node:test";
 import { refreshGitCheckout } from "../src/v3/git-refresh.js";
 
-test("Git refresh advances only a clean matching checkout and preserves unsafe work", async () => {
+test("Git refresh independently advances a clean machine and preserves dirty peer work", async () => {
   const runId = randomUUID();
   const runRoot = realpathSync(
     mkdtempSync(join(tmpdir(), `codefoldersync-${runId}-`)),
   );
   writeFileSync(join(runRoot, "SENTINEL"), `${runId}\n`);
   const workspace = join(runRoot, "workspace");
+  const peerWorkspace = join(runRoot, "peer-workspace");
   const source = join(runRoot, "source");
   const remote = join(runRoot, "remote.git");
   mkdirSync(workspace);
+  mkdirSync(peerWorkspace);
   mkdirSync(source);
   const previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
   const previousSystemConfig = process.env.GIT_CONFIG_NOSYSTEM;
@@ -56,7 +58,9 @@ test("Git refresh advances only a clean matching checkout and preserves unsafe w
     git("-C", source, "remote", "add", "origin", remote);
 
     const checkout = join(workspace, "project");
+    const peerCheckout = join(peerWorkspace, "project");
     git("clone", remote, checkout);
+    git("clone", remote, peerCheckout);
     writeFileSync(join(source, "value.txt"), "published\n");
     git("-C", source, "commit", "-am", "published");
     git("-C", source, "push", "origin", "master");
@@ -81,6 +85,22 @@ test("Git refresh advances only a clean matching checkout and preserves unsafe w
     assert.equal(
       readFileSync(join(checkout, "value.txt"), "utf8"),
       "original\n",
+    );
+    assert.deepEqual(
+      await refreshGitCheckout({ ...input, root: peerWorkspace }),
+      {
+        status: "refreshed",
+        before: git("-C", source, "rev-parse", "HEAD^"),
+        after: publishedCommit,
+      },
+    );
+    assert.equal(
+      readFileSync(join(peerCheckout, "value.txt"), "utf8"),
+      "published\n",
+    );
+    assert.equal(
+      readFileSync(join(checkout, "untracked.txt"), "utf8"),
+      "keep me\n",
     );
     rmSync(join(checkout, "untracked.txt"));
 
