@@ -27,7 +27,7 @@ export function SiteHeader({ docs = false }: { docs?: boolean }) {
           <SiteLink aria-current={docs ? "page" : undefined} href="/docs">
             Documentation
           </SiteLink>
-          <a href="https://github.com/MDerman/codefoldersync">Source</a>
+          <a href="https://github.com/ContextNine/codefoldersync">Source</a>
         </nav>
         <button
           className="menu-button"
@@ -50,7 +50,7 @@ export function SiteHeader({ docs = false }: { docs?: boolean }) {
         <SiteLink href="/docs" onClick={() => setMenuOpen(false)}>
           Documentation
         </SiteLink>
-        <a href="https://github.com/MDerman/codefoldersync">
+        <a href="https://github.com/ContextNine/codefoldersync">
           Source <span aria-hidden="true">↗</span>
         </a>
       </nav>

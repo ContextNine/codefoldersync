@@ -194,7 +194,7 @@ node dist/product-cli.js install
         </p>
 
         <h2 id="build-and-install">Build and install</h2>
-        <CodeBlock>{`git clone https://github.com/MDerman/codefoldersync.git
+        <CodeBlock>{`git clone https://github.com/ContextNine/codefoldersync.git
 cd codefoldersync
 corepack pnpm install
 pnpm check

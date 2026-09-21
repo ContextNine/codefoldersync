@@ -19,7 +19,7 @@ V3 is incompatible with V1 and V2. It uses schema and protocol version 3, a fres
 
 ## Install
 
-CodeFolderSync requires Node.js 22 or newer. Download the release archive and checksum from [GitHub Releases](https://github.com/MDerman/codefoldersync/releases), verify them, extract the archive, then run:
+CodeFolderSync requires Node.js 22 or newer. Download the release archive and checksum from [GitHub Releases](https://github.com/ContextNine/codefoldersync/releases), verify them, extract the archive, then run:
 
 ```bash
 python3 codefoldersync-0.3.0/scripts/install.py --release-sha256 <archive-sha256>

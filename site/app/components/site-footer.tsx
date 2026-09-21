@@ -18,7 +18,7 @@ export function SiteFooter() {
         <SiteLink href="/docs/getting-started">Getting started</SiteLink>
         <SiteLink href="/docs/cli-reference">CLI reference</SiteLink>
         <SiteLink href="/docs/safety-and-backups">Safety and backups</SiteLink>
-        <a href="https://github.com/MDerman/codefoldersync">GitHub</a>
+        <a href="https://github.com/ContextNine/codefoldersync">GitHub</a>
       </nav>
     </footer>
   );

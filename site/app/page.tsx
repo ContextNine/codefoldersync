@@ -118,7 +118,7 @@ export default function Home() {
       <main>
         <a
           className="release-banner"
-          href="https://github.com/MDerman/codefoldersync"
+          href="https://github.com/ContextNine/codefoldersync"
         >
           <span>Open source</span>
           <strong>
