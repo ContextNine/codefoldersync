@@ -40,4 +40,4 @@ Before network I/O the event and object closure enter the durable outbox. Unknow
 
 ## Ownership handoff
 
-When `~/Code/.codefoldersync/config.json` is schema/protocol 3 and lifecycle `normal`, `scripts/workspace-sync.sh` becomes report-only for that root. CodeFolderSync is then the only system allowed to rearrange or update included Code-root content.
+The fleet workspace controller and every target worker inspect `<Code root>/.codefoldersync/config.json` before repository mutation. A structurally valid schema/protocol 3 projection in lifecycle `adoption` leaves workspace reconciliation authoritative. Lifecycle `normal` makes every workspace operation report-only, even when the caller requested apply. A partial, malformed, unsafe, or root-mismatched control directory blocks repository mutation. CodeFolderSync is then the only system allowed to rearrange or update included Code-root content.

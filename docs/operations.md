@@ -73,7 +73,7 @@ Do not clear an incident by deleting objects, journals, or recovery.
 
 ## Workspace ownership
 
-Before cutover, CTX9 workspace reconciliation remains authoritative for managed repository layout. After the accepted V3 config at `~/Code/.codefoldersync/config.json` reaches `normal`, `scripts/workspace-sync.sh` reports only and cannot clone or fast-forward beneath that root.
+Before cutover, CTX9 workspace reconciliation remains authoritative for managed repository layout. The current `fleet-i-sync-code-workspaces` controller and target worker inspect the exact Code root before any repository mutation. After a structurally valid V3 projection reaches `normal`, an apply request becomes `codefoldersync-report-only`: it may inspect Git and remote-head drift, but cannot fetch, fast-forward, clone, move, rewrite remotes, adopt catalog paths, or write `.workspace-sync` history. Invalid control state blocks instead of falling back to mutation.
 
 ## External acceptance boundary
 

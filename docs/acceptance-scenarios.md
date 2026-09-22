@@ -47,7 +47,7 @@ The suite proves:
 
 ## Workspace ownership scenario
 
-`scripts/test-workspace-sync.sh` creates a managed Git fixture, advances its remote, then installs a structurally valid V3 normal marker at the Code root. An `--apply` run must report drift without fast-forwarding. Removing the test marker restores normal workspace apply. All paths live below one validated temporary root.
+The public fleet package test `fleet-i-sync-code-workspaces/scripts/test_workspace_reconciliation.py` creates fresh temporary Code roots and managed Git fixtures. It proves that a structurally valid V3 `normal` projection reduces target and controller apply requests to read-only reports, reports remote drift without fast-forwarding, skips history, agent-configuration, plugin, catalog, and remote mutations, and blocks malformed control state. Lifecycle `adoption` and an absent control directory retain ordinary workspace ownership.
 
 ## Historical harnesses
 
