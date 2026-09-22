@@ -24,7 +24,7 @@ Local mode calls the same store directly. SSH mode starts `codefoldersync hub se
 
 ## Adoption
 
-The target scan is read-only with respect to the target tree. Its plan classifies exact, source-only, target-only, divergent, moved-equivalent, type-conflicting, and Git-boundary paths. Apply revalidates the target digest, moves losing target evidence to `adoption-recovery/<adoption-id>/`, materializes the source seal, force-hashes the result, verifies Git, and records target verification.
+The target scan is read-only with respect to the target tree. Its plan classifies exact, source-only, target-only, divergent, moved-equivalent, type-conflicting, and Git-boundary paths. Apply revalidates the target digest, stages moved-equivalent leaves before an ancestor can move to recovery, moves losing target evidence to `adoption-recovery/<adoption-id>/`, restores the staged leaves at their canonical source paths, materializes the source seal, force-hashes the result, verifies Git, and records target verification.
 
 The authority root is rejected as an adoption target in both planning and apply.
 

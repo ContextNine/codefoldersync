@@ -143,6 +143,21 @@ scenario(
           "missing-target",
         );
         assert.equal(
+          readlinkSync(join(target.config.root, "moved-broken-link")),
+          "missing-moved-target",
+        );
+        assert.equal(
+          existsSync(
+            join(
+              target.config.root,
+              "target-tree",
+              "child",
+              "moved-broken-link",
+            ),
+          ),
+          false,
+        );
+        assert.equal(
           readlinkSync(join(target.config.root, "absolute-link")),
           "/definitely/missing",
         );
@@ -2046,6 +2061,7 @@ function createSourceTree(root: string): void {
   writeFileSync(join(root, "kind-swap"), "source file\n");
   writeFileSync(join(root, "tool.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   symlinkSync("missing-target", join(root, "broken-link"));
+  symlinkSync("missing-moved-target", join(root, "moved-broken-link"));
   symlinkSync("/definitely/missing", join(root, "absolute-link"));
   createRepository(join(root, "deep", "nested-repo"), "nested repository\n");
   createRepository(join(root, "clients", "app"), "source repository\n");
@@ -2070,6 +2086,10 @@ function createTargetTree(root: string, name: "beta" | "gamma"): void {
   writeFileSync(
     join(root, "target-tree", "child", "target.txt"),
     `${name} subtree\n`,
+  );
+  symlinkSync(
+    "missing-moved-target",
+    join(root, "target-tree", "child", "moved-broken-link"),
   );
   writeFileSync(
     join(root, ".workspace-sync", "state.json"),

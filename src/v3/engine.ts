@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   writeFileSync,
 } from "node:fs";
 import {
@@ -1365,6 +1366,36 @@ async function preserveAdoptionDifferences(
   const sourceByPath = new Map(
     source.entries.map((entry) => [entry.path, entry]),
   );
+  const moved = plan.differences.filter(
+    (difference) => difference.classification === "moved-equivalent",
+  );
+  const moveStagingRoot = join(
+    config.stateDir,
+    "adoption-moves",
+    plan.adoptionId,
+  );
+  for (const difference of moved) {
+    if (difference.targetPath === null || difference.sourcePath === null)
+      continue;
+    const from = safeTarget(config.root, difference.targetPath);
+    const to = safeTarget(config.root, difference.sourcePath);
+    const staged = join(
+      moveStagingRoot,
+      hashText(`${difference.targetPath}\0${difference.sourcePath}`),
+    );
+    if (pathExists(from) && (pathExists(staged) || pathExists(to)))
+      throw new Error(
+        `Moved-equivalent source and target both exist: ${difference.path}`,
+      );
+    if (pathExists(from)) {
+      mkdirSync(moveStagingRoot, { recursive: true, mode: 0o700 });
+      renameWithJournal(state, from, staged);
+    }
+    if (!pathExists(staged) && !pathExists(to))
+      throw new Error(
+        `Moved-equivalent content is missing: ${difference.path}`,
+      );
+  }
   const top = adoptionRecoveryCandidates(plan);
   for (const difference of [...top].sort(
     (left, right) => depth(right.path) - depth(left.path),
@@ -1459,26 +1490,28 @@ async function preserveAdoptionDifferences(
     await transport.addConflict(signedConflict(config, sanitized));
     options.fault?.("after-hub-conflict", difference.path);
   }
-  for (const difference of plan.differences.filter(
-    (value) => value.classification === "moved-equivalent",
-  )) {
+  for (const difference of moved) {
     if (difference.targetPath === null || difference.sourcePath === null)
       continue;
-    const from = safeTarget(config.root, difference.targetPath);
     const to = safeTarget(config.root, difference.sourcePath);
-    if (pathExists(from) && pathExists(to))
+    const staged = join(
+      moveStagingRoot,
+      hashText(`${difference.targetPath}\0${difference.sourcePath}`),
+    );
+    if (pathExists(staged) && pathExists(to))
       throw new Error(
         `Moved-equivalent source and target both exist: ${difference.path}`,
       );
-    if (pathExists(from)) {
+    if (pathExists(staged)) {
       mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
-      renameWithJournal(state, from, to);
+      renameWithJournal(state, staged, to);
     }
     if (!pathExists(to))
       throw new Error(
         `Moved-equivalent content is missing: ${difference.path}`,
       );
   }
+  if (pathExists(moveStagingRoot)) rmdirSync(moveStagingRoot);
 }
 
 function adoptionRecoveryCandidates(
@@ -1576,9 +1609,17 @@ function assertAdoptionRecovery(
       (candidate) =>
         path === candidate.path || path.startsWith(`${candidate.path}/`),
     );
+  const movedTargets = new Set(
+    plan.differences.flatMap((difference) =>
+      difference.classification === "moved-equivalent" &&
+      difference.targetPath !== null
+        ? [difference.targetPath]
+        : [],
+    ),
+  );
   const expectedEntries = new Map(
     plan.targetSnapshot.entries
-      .filter((entry) => included(entry.path))
+      .filter((entry) => included(entry.path) && !movedTargets.has(entry.path))
       .map((entry) => [entry.path, entry]),
   );
   const recoveredEntries = new Map(
