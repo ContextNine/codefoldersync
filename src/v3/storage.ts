@@ -223,8 +223,8 @@ export function readCleanupRunSpec(path: string): CleanupRunSpec {
   return value as CleanupRunSpec;
 }
 
-/** Removes exactly one sentinel-qualified disposable run root. */
-export function cleanupRunRoot(spec: CleanupRunSpec): CleanupRunResult {
+/** Proves a run root is disposable before an acceptance workflow mutates it. */
+export function validateCleanupRunRoot(spec: CleanupRunSpec): string {
   if (spec.schemaVersion !== 1 || !safeId.test(spec.runId))
     throw new Error("Cleanup spec is invalid");
   const root = resolve(spec.runRoot);
@@ -234,6 +234,12 @@ export function cleanupRunRoot(spec: CleanupRunSpec): CleanupRunResult {
     throw new Error("Cleanup root must be a physical directory");
   if (readFileSync(join(root, "SENTINEL"), "utf8") !== `${spec.runId}\n`)
     throw new Error("Cleanup sentinel does not match the run ID");
+  return root;
+}
+
+/** Removes exactly one sentinel-qualified disposable run root. */
+export function cleanupRunRoot(spec: CleanupRunSpec): CleanupRunResult {
+  const root = validateCleanupRunRoot(spec);
   const before = inspectPhysicalTree(root);
   try {
     makeOwnerWritable(root);

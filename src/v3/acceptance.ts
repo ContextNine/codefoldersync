@@ -34,6 +34,7 @@ import {
   checkStorageBudget,
   cleanupRunRoot,
   inspectPhysicalTree,
+  validateCleanupRunRoot,
 } from "./storage.js";
 
 export interface TreeWitness {
@@ -191,7 +192,11 @@ export async function runPseudoFleetAcceptanceV3(
   spec: PseudoFleetAcceptanceSpec,
 ): Promise<readonly PseudoFleetRunResult[]> {
   validatePseudoFleetSpec(spec);
-  assertSentinel(spec.runRoot, spec.runId);
+  validateCleanupRunRoot({
+    schemaVersion: 1,
+    runId: spec.runId,
+    runRoot: spec.runRoot,
+  });
   try {
     const capacity = estimatePseudoFleetCapacityV3(spec);
     if (!capacity.passed)

@@ -1037,6 +1037,24 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
       hubMachineId: "wootbook",
       masters,
     };
+    const shortRunRoot = join(base, "run");
+    const shortEvidence = join(base, "short-root-evidence");
+    mkdirSync(shortRunRoot, { mode: 0o700 });
+    writeFileSync(join(shortRunRoot, "SENTINEL"), `${runId}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    await assert.rejects(
+      runPseudoFleetAcceptanceV3({
+        ...spec,
+        runRoot: shortRunRoot,
+        evidenceDirectory: shortEvidence,
+      }),
+      /run-qualified/u,
+    );
+    assert.equal(existsSync(shortRunRoot), true);
+    assert.equal(existsSync(shortEvidence), false);
     const capacity = estimatePseudoFleetCapacityV3(spec);
     assert.equal(capacity.passed, true);
     assert.equal(capacity.objectStoreCopiesPerRepetition, 4);

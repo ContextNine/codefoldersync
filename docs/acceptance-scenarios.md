@@ -75,7 +75,7 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - the Linux systemd lane edits while stopped and requires the next start's full reconciliation to publish the missed change;
 - long-lived source, hub, and target observers stream hashed state changes to one controller. Only that controller assigns accepted timing.
 
-The pseudo-fleet command accepts only an existing run root with a matching sentinel. It refuses an existing repetition directory, writes one sanitized result outside the disposable root, and removes that exact root after success or failure. It never cleans a prior run or a master:
+The pseudo-fleet command accepts only an existing run-qualified root with a matching sentinel. It proves the root is eligible for exact cleanup before creating a repetition, refuses an existing repetition directory, writes one sanitized result outside the disposable root, and removes that exact root after success or failure. It never cleans a prior run or a master:
 
 ```bash
 codefoldersync acceptance witness --root /absolute/master/Code

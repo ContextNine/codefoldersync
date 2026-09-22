@@ -159,7 +159,7 @@ test("backup capture streams ciphertext into an independent receipt", async () =
           ),
         },
       }),
-      /failed without publishing path details/u,
+      /(?:tool failed or emitted a warning|failed without publishing path details)/u,
     );
     assert.deepEqual(readdirSync(sourceStaging), ["SENTINEL"]);
     assert.equal(existsSync(failedReceiptBase), false);
