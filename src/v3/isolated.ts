@@ -1167,18 +1167,8 @@ async function restartAndVerifyServices(
       await serviceCall(spec, entry, repetitionId, layouts, "restart"),
     );
     if (!status.running) throw new Error("Isolated service restart failed");
-    const layout = requiredLayout(layouts, entry.machineId);
-    const verified = syncSummary(
-      await callIsolatedAgent(entry, {
-        action: "verify",
-        repetitionId,
-        repetitionRoot: layout.repetitionRoot,
-        configPath: layout.configPath,
-      }),
-    );
-    if (verified.status !== "clean")
-      throw new Error("Isolated verification failed after service restart");
   }
+  await waitForFullVerification(spec, repetitionId, layouts);
 }
 
 async function stopAndUninstallServices(
@@ -1252,18 +1242,29 @@ async function cleanupIsolatedRuns(
     readonly layouts: ReadonlyMap<string, MachineLayout>;
   }[],
 ): Promise<void> {
-  const attempts = await Promise.allSettled(
-    runs.flatMap(({ repetitionId, layouts }) =>
-      spec.machines.map((entry) => {
-        const layout = requiredLayout(layouts, entry.machineId);
-        return callIsolatedAgent(entry, {
-          action: "cleanup",
-          repetitionId,
-          repetitionRoot: layout.repetitionRoot,
-        });
-      }),
-    ),
+  const nonHubMachines = spec.machines.filter(
+    (entry) => entry.machineId !== spec.hubMachineId,
   );
+  const hub = machine(spec, spec.hubMachineId);
+  const cleanup = async (machines: readonly IsolatedMachineSpec[]) =>
+    await Promise.allSettled(
+      runs.flatMap(({ repetitionId, layouts }) =>
+        machines.map((entry) => {
+          const layout = requiredLayout(layouts, entry.machineId);
+          return callIsolatedAgent(entry, {
+            action: "cleanup",
+            repetitionId,
+            repetitionRoot: layout.repetitionRoot,
+          });
+        }),
+      ),
+    );
+  // A peer finishing shutdown can touch the local hub after its own root is
+  // removed. Retire every remote peer first, then remove the hub root last.
+  const attempts = [
+    ...(await cleanup(nonHubMachines)),
+    ...(await cleanup([hub])),
+  ];
   const failures = attempts.filter(
     (result): result is PromiseRejectedResult => result.status === "rejected",
   );
@@ -1322,19 +1323,10 @@ async function verifySemantics(
   repetitionId: string,
   layouts: ReadonlyMap<string, MachineLayout>,
 ): Promise<string> {
+  await waitForFullVerification(spec, repetitionId, layouts);
   const semantic = await Promise.all(
     spec.machines.map(async (entry) => {
       const layout = requiredLayout(layouts, entry.machineId);
-      const verified = syncSummary(
-        await callIsolatedAgent(entry, {
-          action: "verify",
-          repetitionId,
-          repetitionRoot: layout.repetitionRoot,
-          configPath: layout.configPath,
-        }),
-      );
-      if (verified.status !== "clean")
-        throw new Error("Isolated full verification failed");
       return semanticResultValue(
         await callIsolatedAgent(entry, {
           action: "semantic",
@@ -1352,6 +1344,64 @@ async function verifySemantics(
   if (digest === undefined)
     throw new Error("Isolated semantic digest is missing");
   return digest;
+}
+
+async function waitForFullVerification(
+  spec: IsolatedFleetAcceptanceSpec,
+  repetitionId: string,
+  layouts: ReadonlyMap<string, MachineLayout>,
+): Promise<void> {
+  const deadline = Date.now() + spec.timeoutMs;
+  let summaries: readonly {
+    readonly machineId: string;
+    readonly summary: SyncSummary;
+  }[] = [];
+  while (Date.now() < deadline) {
+    summaries = await Promise.all(
+      spec.machines.map(async (entry) => {
+        const layout = requiredLayout(layouts, entry.machineId);
+        return {
+          machineId: entry.machineId,
+          summary: syncSummary(
+            await callIsolatedAgent(entry, {
+              action: "verify",
+              repetitionId,
+              repetitionRoot: layout.repetitionRoot,
+              configPath: layout.configPath,
+            }),
+          ),
+        };
+      }),
+    );
+    const conflicted = summaries.filter(
+      ({ summary }) => summary.status === "conflict",
+    );
+    if (conflicted.length > 0)
+      throw new Error(
+        `Isolated full verification found conflicts: ${verificationDetails(conflicted)}`,
+      );
+    if (summaries.every(({ summary }) => summary.status === "clean")) return;
+    await new Promise<void>((resolvePromise) =>
+      setTimeout(resolvePromise, spec.observerPollIntervalMs),
+    );
+  }
+  throw new Error(
+    `Isolated full verification timed out: ${verificationDetails(summaries)}`,
+  );
+}
+
+function verificationDetails(
+  entries: readonly {
+    readonly machineId: string;
+    readonly summary: SyncSummary;
+  }[],
+): string {
+  return entries
+    .map(
+      ({ machineId, summary }) =>
+        `${machineId}=${summary.status}${summary.reasons.length > 0 ? `(${summary.reasons.join("; ")})` : ""}`,
+    )
+    .join(", ");
 }
 
 async function waitForConvergence(
