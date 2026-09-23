@@ -5,7 +5,10 @@ on:
     tags: ["v*"]
 
 permissions:
+  artifact-metadata: write
+  attestations: write
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -25,8 +28,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: python3 scripts/build_release.py
+      - name: Attest release files
+        uses: actions/attest@v4
+        with:
+          subject-path: release/codefoldersync-*
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             release/codefoldersync-*.tar.gz
             release/codefoldersync-*.tar.gz.sha256
+            release/codefoldersync-*.tar.gz.release.json

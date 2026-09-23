@@ -21,7 +21,7 @@ node dist/product-cli.js install --release-sha256 <accepted-release-sha256>
 ~/.local/bin/codefoldersync --version --json
 ```
 
-The installer copies `dist/` to `~/.local/lib/codefoldersync/0.3.0/`, records the accepted archive SHA-256 beside the installed build, and atomically activates `~/.local/bin/codefoldersync`. Distributed setup rejects a missing or different release digest. Rollback only changes the wrapper to a retained version; it does not convert V3 config, state, or hub data.
+The installer copies `dist/` to `~/.local/lib/codefoldersync/0.3.0/`, records the accepted archive SHA-256 beside the installed build, and atomically activates `~/.local/bin/codefoldersync`. Each GitHub release also includes an attested record naming the full source commit and archive digest. Distributed setup rejects a missing or different release digest. Rollback only changes the wrapper to a retained version; it does not convert V3 config, state, or hub data.
 
 ## Setup sequence
 
