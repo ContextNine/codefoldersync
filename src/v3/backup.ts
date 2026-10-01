@@ -287,8 +287,13 @@ async function captureStreamedEncryptedBackupUnsafe(
       machineId: spec.machineId,
       sourcePlatform: spec.sourcePlatform,
       archiveMetadataSha256: null,
+      onProgress: () => checkSourceStorage(validated, baseline, 0),
     });
-    checkSourceStorage(validated, baseline, 0);
+    checkSourceStorage(
+      validated,
+      baseline,
+      inspectPhysicalTree(work).allocatedBytes,
+    );
     const archive = await createEncryptedArchiveStream({
       sourceCodeRoot: validated.sourceCodeRoot,
       sourcePlatform: spec.sourcePlatform,
@@ -306,6 +311,7 @@ async function captureStreamedEncryptedBackupUnsafe(
       machineId: spec.machineId,
       sourcePlatform: spec.sourcePlatform,
       archiveMetadataSha256: archive.archiveMetadataSha256,
+      onProgress: () => checkSourceStorage(validated, baseline, 0),
     });
     const recapturedArchiveMetadataSha256 = await createArchiveMetadataDigest(
       validated.sourceCodeRoot,
@@ -519,6 +525,7 @@ interface WriteSemanticManifestInput {
   readonly machineId: string;
   readonly sourcePlatform: BackupPlatform;
   readonly archiveMetadataSha256: string | null;
+  readonly onProgress?: () => void;
 }
 
 export async function writeSemanticManifest(
@@ -655,6 +662,7 @@ export async function writeSemanticManifest(
         await writePortable(record);
         await writeMember(rawArchiveMember);
         entries += 1;
+        if (entries % 4096 === 0) input.onProgress?.();
         if (child.name === ".git" && before.isSymbolicLink())
           throw new Error(
             "Semantic manifest rejects a symlinked Git directory",
@@ -697,6 +705,7 @@ export async function writeSemanticManifest(
           gitDirectory.kind,
         ),
       );
+    input.onProgress?.();
     const footer: ManifestFooter = {
       record: "footer",
       portableSha256: portable.digest("hex"),

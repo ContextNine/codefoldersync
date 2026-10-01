@@ -99,3 +99,22 @@ test("bounded acceptance storage is physical, capped, and cleanable", () => {
     rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("Mac capture preflight admits a large metadata-only staging shape", () => {
+  const inventory = {
+    schemaVersion: 1 as const,
+    entries: 2_125_272,
+    directories: 223_139,
+    files: 1_866_055,
+    symlinks: 36_078,
+    logicalBytes: 71_296_753_111,
+    allocatedBytes: 76_630_849_891,
+    availableBytes: 183_416_287_232,
+    filesystemDevice: "fixture",
+  };
+
+  assert.ok(
+    estimateSourceCaptureTransientBytes(inventory) <
+      storageLimits.macTransientBytes,
+  );
+});

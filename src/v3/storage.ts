@@ -177,7 +177,7 @@ export function estimateSourceCaptureTransientBytes(
   inventory: PhysicalTreeInventory,
 ): number {
   return checkedProjection(
-    inventory.entries * 4096 + 64 * 1024 ** 2,
+    inventory.entries * 2048 + 64 * 1024 ** 2,
     "source capture transient bytes",
   );
 }
