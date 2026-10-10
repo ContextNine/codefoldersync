@@ -55,6 +55,7 @@ import { conflictPath, portableName, safeTarget } from "./paths.js";
 import { contentVersion, deriveMutations } from "./mutations.js";
 import { LocalState } from "./state.js";
 import { HubTransport } from "./transport.js";
+import { acquireGitLease, recoverGitLease } from "./git-lease.js";
 import {
   schemaVersion,
   type AdoptionClassification,
@@ -1100,6 +1101,7 @@ function reattachRestoredNodes(
       entries,
       snapshot.gitBoundaries,
       snapshot.ignoreDigest,
+      snapshot.repositories,
     ),
   };
 }
@@ -1838,6 +1840,7 @@ async function applySnapshot(
   options: SyncFolderOptions = {},
 ): Promise<string | null> {
   validateNamespacePolicy(desired, config);
+  using gitLease = acquireGitLease(config, current.repositories);
   assertRepositoryContexts(config, current, desired);
   for (const entry of desired.entries) {
     if (entry.kind === "directory") continue;
@@ -1981,6 +1984,14 @@ async function applySnapshot(
     const stage = stagedMoves.get(move.from.nodeId);
     if (stage === undefined || !pathExists(stage)) continue;
     const to = safeTarget(config.root, move.to.path);
+    if (
+      pathExists(to) &&
+      lstatSync(to).isDirectory() &&
+      !directoryFullyIncluded(config, move.to.path, current)
+    )
+      throw new Error(
+        "A scoped move would displace local-only directory contents",
+      );
     if (pathExists(to))
       moveWithJournal(
         state,
@@ -2035,7 +2046,8 @@ async function applySnapshot(
       throw new Error(`Desired leaf has no manifest: ${entry.path}`);
     const stage = join(config.stateDir, "staging", randomUUID());
     materializeManifest(entry.manifestId, stage, objects);
-    if (isPlaintextEnvPath(entry.path)) chmodSync(stage, 0o600);
+    if (entry.kind === "regular" && isPlaintextEnvPath(entry.path))
+      chmodSync(stage, 0o600);
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     renameSync(stage, target);
   }
@@ -2658,6 +2670,7 @@ function recoverInterruptedApplies(
   config: ProductConfig,
   state: LocalState,
 ): void {
+  recoverGitLease(config);
   for (const journal of state.journals()) {
     if (journal.kind !== "snapshot-apply") continue;
     const pending = snapshotApplyJournal(journal.value);

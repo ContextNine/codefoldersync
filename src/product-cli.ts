@@ -1217,6 +1217,9 @@ function positional(
     "--spec",
     "--release-sha256",
     "--approve-target",
+    "--sync-policy",
+    "--default-branch",
+    "--include",
   ]);
   const values: string[] = [];
   for (let cursor = 0; cursor < args.length; cursor += 1) {

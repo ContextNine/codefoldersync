@@ -8,7 +8,7 @@ Both `schemaVersion` and `protocolVersion` are `3`. V1 and V2 configuration, hub
 
 ## Configuration
 
-`ProductConfig` contains revision, folder identity, local root/state projection, local peer identity, hub, authority public key, enrolled peers and roots, ignore digest, lifecycle, backup witness, service timing, and authority signature.
+`ProductConfig` contains revision, folder identity, local root/state projection, local peer identity, hub, authority public key, enrolled peers and roots, ignore digest, signed synchronization policy, lifecycle, backup witness, service timing, and authority signature. The policy selects default-branch gating or an explicit file allowlist and records plaintext ENV consent.
 
 The authority signature covers portable desired state. The local root must equal the root in that peer's signed record. Targets are saved mode read-only; a changed signed field fails verification and cannot publish.
 
@@ -18,13 +18,13 @@ The authority signature covers portable desired state. The local root must equal
 
 - folder and ignore identity;
 - sorted recursive catalog entries;
-- sorted Git boundaries;
+- sorted repository identity, branch, and HEAD contexts for default-branch scope;
 - a diagnostic creation time;
 - an independently recomputed semantic digest.
 
 A catalog entry contains path, parent path, parent node ID, display and portable name, stable node ID, kind, manifest ID, executable meaning, and local filesystem observations. The synthetic root identity is `$root`. Manifest validation requires every non-root entry to name an existing directory parent. Device, inode, timestamps, and size are rename/capture hints and are excluded from cross-peer semantic equality.
 
-The semantic digest covers accepted paths, parent identities, stable node IDs, kinds, content manifests, executable meaning, and Git boundaries. Target verification rescans with source node IDs as its accepted identity baseline.
+The semantic digest covers accepted paths, parent identities, stable node IDs, kinds, content manifests, executable meaning, and repository contexts. Selected-file snapshots use an empty repository-context list. Target verification rescans with source node IDs as its accepted identity baseline.
 
 ## Mutation events
 
@@ -38,13 +38,13 @@ Every object ID is SHA-256 of exact bytes.
 
 - A regular manifest records executable meaning, byte length, whole-file digest, and ordered immutable chunks.
 - A symlink manifest records exact target text and its digest.
-- A tree manifest records sorted child name, kind, and manifest. It represents transactional Git metadata and immutable normal directory-conflict evidence.
+- A tree manifest records sorted child name, kind, and manifest. It represents immutable included directory-conflict evidence, never local-only siblings.
 
 Objects are stored in SQLite `WITHOUT ROWID` tables with WAL and full synchronous commits. Reads always verify their digest.
 
-## Git boundaries
+## Local Git context
 
-A boundary records stable boundary ID, worktree-relative path, contained physical Git path, boundary kind, and tree-manifest ID. Kinds are physical, contained indirection, and submodule indirection. External targets are not representable.
+Git metadata stays local. The signed policy validator rejects a nonempty Git-boundary list. Default-branch snapshots record each repository's path, root-commit identity hash, branch, and exact HEAD. Selected-file discovery needs only contained metadata exclusions and does not require a committed or idle checkout. External Git targets remain unsupported. See [synchronization policies](sync-policies.md) for the current development gates.
 
 ## Local SQLite state
 

@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -160,6 +161,37 @@ test("ENV-only peers share requested values across independent checkouts and ret
     assert.equal(git(target.root, "rev-parse", "HEAD"), head);
     assert.deepEqual(readFileSync(join(target.root, ".git", "index")), index);
 
+    // ENV transfer is independent of a sibling repository's unborn/locked state.
+    const scratch = join(target.root, "scratch");
+    mkdirSync(scratch);
+    git(scratch, "init", "-b", "different-branch");
+    writeFileSync(join(scratch, ".git", "index.lock"), "synthetic-lock\n");
+    writeFileSync(
+      join(source.root, ".env"),
+      "SYNTHETIC_FIXTURE=with-unborn-sibling\n",
+    );
+    synced(await syncFolderV3(source));
+    synced(await syncFolderV3(target));
+    assert.equal(
+      readFileSync(join(target.root, ".env"), "utf8"),
+      "SYNTHETIC_FIXTURE=with-unborn-sibling\n",
+    );
+    assert.equal(
+      readFileSync(join(scratch, ".git", "index.lock"), "utf8"),
+      "synthetic-lock\n",
+    );
+    rmSync(join(scratch, ".git", "index.lock"));
+
+    symlinkSync("source.ts", join(source.root, ".env.link"));
+    const codeMode = lstatSync(join(target.root, "source.ts")).mode;
+    synced(await syncFolderV3(source));
+    synced(await syncFolderV3(target));
+    assert.equal(
+      readFileSync(join(target.root, ".env.link"), "utf8"),
+      localCode,
+    );
+    assert.equal(lstatSync(join(target.root, "source.ts")).mode, codeMode);
+
     mkdirSync(join(source.root, "apps", "worker"), { recursive: true });
     mkdirSync(join(target.root, "apps", "worker"), { recursive: true });
     writeFileSync(
@@ -227,6 +259,69 @@ test("default-branch peers transfer edits only within a matching Git context", a
         "export const value = 2;\n",
       );
       assert.equal(git(target.root, "rev-parse", "HEAD"), targetHead);
+
+      writeFileSync(
+        join(source.root, "source.ts"),
+        "export const value = 20;\n",
+      );
+      synced(await syncFolderV3(source));
+      let attemptedCheckout = false;
+      const applied = await syncFolderV3(target, {
+        fault(point) {
+          if (point !== "after-apply-journal") return;
+          attemptedCheckout = true;
+          const checkout = spawnSync(
+            "git",
+            ["-C", target.root, "switch", "-c", "racing-checkout"],
+            { encoding: "utf8" },
+          );
+          assert.notEqual(checkout.status, 0);
+        },
+      });
+      synced(applied);
+      assert.equal(attemptedCheckout, true);
+      assert.equal(
+        git(target.root, "symbolic-ref", "--short", "HEAD"),
+        "master",
+      );
+      assert.equal(
+        readFileSync(join(target.root, "source.ts"), "utf8"),
+        "export const value = 20;\n",
+      );
+
+      writeFileSync(
+        join(source.root, "source.ts"),
+        "export const value = 21;\n",
+      );
+      synced(await syncFolderV3(source));
+      const child = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "-e",
+          `
+        import { loadConfig } from './src/v3/config.ts';
+        import { syncFolderV3 } from './src/v3/engine.ts';
+        const config = loadConfig(process.argv[1]);
+        await syncFolderV3(config, { fault(point) {
+          if (point === 'after-apply-journal') process.kill(process.pid, 'SIGKILL');
+        }});
+      `,
+          join(target.root, ".codefoldersync", "config.json"),
+        ],
+        { encoding: "utf8", timeout: 15_000 },
+      );
+      assert.equal(child.signal, "SIGKILL", child.stderr);
+      synced(await syncFolderV3(target));
+      assert.equal(
+        readFileSync(join(target.root, "source.ts"), "utf8"),
+        "export const value = 21;\n",
+      );
+      assert.equal(git(target.root, "rev-parse", "HEAD"), targetHead);
+      git(target.root, "switch", "-c", "post-recovery-checkout");
+      git(target.root, "switch", "master");
 
       git(target.root, "switch", "-c", "feature");
       const featureCode = readFileSync(join(target.root, "source.ts"), "utf8");

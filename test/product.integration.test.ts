@@ -276,6 +276,8 @@ scenario(
         "authority",
         join(base, "authority", "state"),
         join(authorityRoot, ".codefoldersync", "config.json"),
+        "selected-files",
+        "**",
         "2",
         betaRoot,
         join(base, "beta", "state"),
@@ -1695,14 +1697,26 @@ scenario(
       withScanFixture((root, config, objects) => {
         const repository = join(root, "repository");
         createRepository(repository, "lock fixture\n");
+        const branchConfig = createAuthorityConfig({
+          root,
+          stateDir: `${config.stateDir}-branch-policy`,
+          folderName: "default-branch-locks",
+          peerName: "authority",
+          hub: config.hub,
+          syncPolicy: {
+            mode: "default-branch",
+            branch: git(repository, ["symbolic-ref", "--short", "HEAD"]),
+          },
+        });
         const gitDirectory = join(repository, ".git");
         writeFileSync(join(gitDirectory, "codex-repo-sync.lock"), "");
         assert.doesNotThrow(() =>
-          scanNamespace(config, objects, ensureIgnore(root), [], true),
+          scanNamespace(branchConfig, objects, ensureIgnore(root), [], true),
         );
         writeFileSync(join(gitDirectory, "index.lock"), "");
         assert.throws(
-          () => scanNamespace(config, objects, ensureIgnore(root), [], true),
+          () =>
+            scanNamespace(branchConfig, objects, ensureIgnore(root), [], true),
           /Git mutation is in progress/u,
         );
       });

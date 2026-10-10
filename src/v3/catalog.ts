@@ -14,7 +14,8 @@ import { normalizeRelativePath, portableName } from "./paths.js";
 import {
   inspectRepositoryContext,
   policyIncludes,
-  compileInclude,
+  policyIncludesDirectory,
+  repositoryMetadata,
 } from "./policy.js";
 import {
   schemaVersion,
@@ -77,12 +78,14 @@ export function scanNamespace(
   const contexts = new Map<string, RepositoryContext>();
   const discover = (directory: string, relativeDirectory: string): void => {
     if (existsSync(join(directory, ".git"))) {
-      contexts.set(
-        relativeDirectory,
-        inspectRepositoryContext(root, relativeDirectory, (paths) => {
-          for (const path of paths) metadataPaths.add(path);
-        }),
-      );
+      for (const path of repositoryMetadata(root, relativeDirectory)
+        .metadataPaths)
+        metadataPaths.add(path);
+      if (config.syncPolicy.mode === "default-branch")
+        contexts.set(
+          relativeDirectory,
+          inspectRepositoryContext(root, relativeDirectory),
+        );
     }
     for (const child of readdirSync(directory, { withFileTypes: true })) {
       if (
@@ -131,6 +134,8 @@ export function scanNamespace(
       const stat = lstatSync(target);
       const directoryKind = stat.isDirectory() && !stat.isSymbolicLink();
       if (ignore.ignores(path, directoryKind)) continue;
+      if (directoryEntry.name === ".git") continue;
+      if (!directoryKind && !policyIncludes(config.syncPolicy, path)) continue;
       const alias = portableName(directoryEntry.name);
       if (names.has(alias))
         throw new Error(
@@ -139,10 +144,6 @@ export function scanNamespace(
       names.add(alias);
       if (stat.dev !== rootStat.dev)
         throw new Error(`Nested mount is unsupported: ${path}`);
-      if (directoryEntry.name === ".git") {
-        continue;
-      }
-      if (!directoryKind && !policyIncludes(config.syncPolicy, path)) continue;
       const exact = byPath.get(path);
       const identities = byIdentity.get(`${stat.dev}:${stat.ino}`) ?? [];
       const moved = identities.find((entry) => !claimed.has(entry.nodeId));
@@ -227,13 +228,7 @@ export function scanNamespace(
     (entry) =>
       entry.kind !== "directory" ||
       includedParents.has(entry.path) ||
-      ((selectedPolicy.mode === "default-branch" ||
-        selectedPolicy.includes.some((pattern) => {
-          const expression = compileInclude(pattern);
-          return (
-            expression.test(entry.path) || expression.test(`${entry.path}/`)
-          );
-        })) &&
+      (policyIncludesDirectory(selectedPolicy, entry.path) &&
         (readdirSync(join(root, entry.path)).length === 0 ||
           logicalEmptyDirectories.has(entry.path))),
   );
@@ -401,11 +396,12 @@ export function validateNamespacePolicy(
       !policyIncludes(config.syncPolicy, entry.path) &&
       !(
         entry.kind === "directory" &&
-        leaves.some(
-          (leaf) =>
-            leaf.path.startsWith(`${entry.path}/`) &&
-            policyIncludes(config.syncPolicy, leaf.path),
-        )
+        (policyIncludesDirectory(config.syncPolicy, entry.path) ||
+          leaves.some(
+            (leaf) =>
+              leaf.path.startsWith(`${entry.path}/`) &&
+              policyIncludes(config.syncPolicy, leaf.path),
+          ))
       )
     )
       throw new Error(

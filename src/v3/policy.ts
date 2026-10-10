@@ -1,9 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+} from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { hashJson } from "../v2/hash.js";
 import { normalizeRelativePath } from "./paths.js";
 import type { RepositoryContext, SyncPolicy } from "./types.js";
+
+// Owned apply locks are excluded only in this process; other writers still fail.
+export const ownedGitLocks = new Set<string>();
 
 export const defaultSyncPolicy: SyncPolicy = {
   mode: "selected-files",
@@ -16,6 +25,32 @@ export const plaintextEnvPolicy: SyncPolicy = {
   includes: ["**/.env", "**/.env.*"],
   plaintextEnv: true,
 };
+
+const compiledPatterns = new WeakMap<SyncPolicy, readonly RegExp[]>();
+
+function includeExpressions(policy: SyncPolicy): readonly RegExp[] {
+  if (policy.mode === "default-branch") return [];
+  let expressions = compiledPatterns.get(policy);
+  if (expressions === undefined) {
+    expressions = policy.includes.map(compileInclude);
+    compiledPatterns.set(policy, expressions);
+  }
+  return expressions;
+}
+
+export function policyIncludesDirectory(
+  policy: SyncPolicy,
+  path: string,
+): boolean {
+  return (
+    policyIncludes(policy, path) ||
+    (policy.mode === "selected-files" &&
+      !isPlaintextEnvPath(path) &&
+      includeExpressions(policy).some((expression) =>
+        expression.test(`${path}/`),
+      ))
+  );
+}
 
 export function validateSyncPolicy(
   value: unknown,
@@ -110,7 +145,7 @@ export function policyIncludes(policy: SyncPolicy, path: string): boolean {
     return (
       policy.mode === "selected-files" &&
       policy.plaintextEnv &&
-      policy.includes.some((pattern) => compileInclude(pattern).test(path))
+      includeExpressions(policy).some((expression) => expression.test(path))
     );
   if (
     policy.mode === "selected-files" &&
@@ -122,7 +157,7 @@ export function policyIncludes(policy: SyncPolicy, path: string): boolean {
     return false;
   return (
     policy.mode === "default-branch" ||
-    policy.includes.some((pattern) => compileInclude(pattern).test(path))
+    includeExpressions(policy).some((expression) => expression.test(path))
   );
 }
 
@@ -147,6 +182,68 @@ export function inspectRepositoryContext(
   path: string,
   onMetadata?: (paths: readonly string[]) => void,
 ): RepositoryContext {
+  const { worktree, metadataPaths } = repositoryMetadata(root, path);
+  onMetadata?.(metadataPaths);
+  for (const directory of metadataPaths) {
+    if (
+      readdirSync(directory).some(
+        (name) =>
+          name.endsWith(".lock") &&
+          name !== "codex-repo-sync.lock" &&
+          !ownedGitLocks.has(join(directory, name)),
+      ) ||
+      [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+      ].some((name) => existsSync(join(directory, name)))
+    )
+      throw new Error(
+        "Git mutation is in progress; repository synchronization is paused",
+      );
+  }
+  for (const directory of metadataPaths) {
+    const refs = join(directory, "refs");
+    const inspectRefs = (target: string): void => {
+      if (!existsSync(target)) return;
+      for (const entry of readdirSync(target, { withFileTypes: true })) {
+        const path = join(target, entry.name);
+        if (entry.name.endsWith(".lock") && !ownedGitLocks.has(path))
+          throw new Error(
+            "Git reference mutation is in progress; synchronization is paused",
+          );
+        if (entry.isDirectory() && !entry.isSymbolicLink()) inspectRefs(path);
+      }
+    };
+    inspectRefs(refs);
+  }
+  const head = git(worktree, ["rev-parse", "--verify", "HEAD"]);
+  const branch = git(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  // Root commits are stable across clones; remotes may embed credentials.
+  const roots = git(worktree, ["rev-list", "--max-parents=0", "HEAD"]);
+  if (roots === null || roots.length === 0)
+    throw new Error(
+      "Unborn repositories must be committed before synchronization",
+    );
+  return {
+    path: relative(root, worktree).replaceAll(sep, "/"),
+    identity: hashJson(roots.split("\n").sort()),
+    branch,
+    head,
+  };
+}
+
+/** Selected files need metadata exclusion, not an eligible Git checkout. */
+export function repositoryMetadata(
+  root: string,
+  path: string,
+): {
+  readonly worktree: string;
+  readonly metadataPaths: readonly string[];
+} {
   const worktree = join(root, path);
   const entry = join(worktree, ".git");
   const entryStat = lstatSync(entry);
@@ -166,7 +263,8 @@ export function inspectRepositoryContext(
     throw new Error("External Git directory is unsupported");
   if (
     !lstatSync(metadata).isDirectory() ||
-    lstatSync(metadata).isSymbolicLink()
+    lstatSync(metadata).isSymbolicLink() ||
+    realpathSync(metadata) !== metadata
   )
     throw new Error("Git metadata must be a physical directory");
   const common = git(worktree, ["rev-parse", "--git-common-dir"]);
@@ -177,39 +275,12 @@ export function inspectRepositoryContext(
     !commonPath.startsWith(`${physicalRoot}${sep}`)
   )
     throw new Error("External Git common directory is unsupported");
-  onMetadata?.([...new Set([metadata, commonPath])]);
-  for (const directory of new Set([metadata, commonPath])) {
-    if (
-      readdirSync(directory).some(
-        (name) => name.endsWith(".lock") && name !== "codex-repo-sync.lock",
-      ) ||
-      [
-        "MERGE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "REVERT_HEAD",
-        "rebase-apply",
-        "rebase-merge",
-        "sequencer",
-      ].some((name) => existsSync(join(directory, name)))
-    )
-      throw new Error(
-        "Git mutation is in progress; repository synchronization is paused",
-      );
-  }
-  const head = git(worktree, ["rev-parse", "--verify", "HEAD"]);
-  const branch = git(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-  // Root commits are stable across clones; remotes may embed credentials.
-  const roots = git(worktree, ["rev-list", "--max-parents=0", "HEAD"]);
-  if (roots === null || roots.length === 0)
-    throw new Error(
-      "Unborn repositories must be committed before synchronization",
-    );
-  return {
-    path: relative(root, worktree).replaceAll(sep, "/"),
-    identity: hashJson(roots.split("\n").sort()),
-    branch,
-    head,
-  };
+  if (
+    !lstatSync(commonPath).isDirectory() ||
+    realpathSync(commonPath) !== commonPath
+  )
+    throw new Error("Git common metadata must be a physical directory");
+  return { worktree, metadataPaths: [...new Set([metadata, commonPath])] };
 }
 
 export function assertMatchingRepositoryContext(

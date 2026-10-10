@@ -16,7 +16,11 @@ import type {
   SyncSummary,
   SyncPolicy,
 } from "./types.js";
-import { defaultSyncPolicy, validateSyncPolicy } from "./policy.js";
+import {
+  defaultSyncPolicy,
+  plaintextEnvPolicy,
+  validateSyncPolicy,
+} from "./policy.js";
 
 export interface FleetSetupPeerSpec {
   readonly peerName: string;
@@ -92,6 +96,35 @@ export async function promptFleetSetupSpecV3(
       defaultConfigPath(authorityRoot),
     ),
   );
+  const policyMode = await answer(
+    question,
+    "Synchronization policy (default-branch/selected-files/plaintext-env)",
+    "default-branch",
+  );
+  let syncPolicy: SyncPolicy;
+  if (policyMode === "default-branch") {
+    syncPolicy = {
+      mode: policyMode,
+      branch: await answer(question, "Default branch", "master"),
+    };
+  } else if (policyMode === "selected-files") {
+    syncPolicy = {
+      mode: policyMode,
+      includes: (await answer(question, "Include patterns, comma separated"))
+        .split(",")
+        .map((pattern) => pattern.trim()),
+      plaintextEnv: false,
+    };
+  } else if (policyMode === "plaintext-env") {
+    const consent = await answer(
+      question,
+      "Plaintext ENV values will be retained in private hub objects and recovery. Is this workspace authorized? (yes/no)",
+    );
+    if (consent.toLowerCase() !== "yes")
+      throw new Error("Plaintext ENV sharing was not authorized");
+    syncPolicy = plaintextEnvPolicy;
+  } else throw new Error("Unknown synchronization policy");
+  validateSyncPolicy(syncPolicy);
   const targetCountValue = await answer(question, "Populated target count");
   const targetCount = Number(targetCountValue);
   if (!Number.isSafeInteger(targetCount) || targetCount < 1)
@@ -129,6 +162,7 @@ export async function promptFleetSetupSpecV3(
     folderName,
     backupWitness,
     hub: parseHubSpec(hubValue),
+    syncPolicy,
     authority: {
       peerName: authorityPeerName,
       root: authorityRoot,
