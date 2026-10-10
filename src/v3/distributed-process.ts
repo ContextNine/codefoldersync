@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { canonicalJson } from "../v2/hash.js";
 import { productVersion } from "../v2/service.js";
 import { shellQuote } from "../executor.js";
@@ -12,6 +13,7 @@ import {
   applyAdoptionV3,
   cutoverAdoptionV3,
   planAdoptionV3,
+  recoverConflictV3,
   sealSourceV3,
   syncFolderV3,
   verifyFullV3,
@@ -38,6 +40,24 @@ import {
   type ProductConfig,
   type SyncSummary,
 } from "./types.js";
+import { validateCleanupRunRoot, type CleanupRunSpec } from "./storage.js";
+import { assertRealAncestors } from "./paths.js";
+
+export type AcceptanceCrashPoint =
+  "after-outbox" | "after-hub-accept" | "after-moves-staged";
+
+export class DistributedAgentTermination extends Error {
+  public constructor(public readonly signal: NodeJS.Signals) {
+    super(`Distributed agent terminated by ${signal}`);
+  }
+}
+
+export function acceptanceCrashMarker(
+  stateDir: string,
+  point: AcceptanceCrashPoint,
+): string {
+  return join(stateDir, `acceptance-crash-${point}.json`);
+}
 
 interface ConfigExpectation {
   readonly folderId: string;
@@ -88,6 +108,21 @@ type AgentRequest =
       readonly action: "cutover";
       readonly configPath: string;
       readonly expected: ConfigExpectation;
+    }
+  | {
+      readonly action: "acceptance-sync-crash";
+      readonly configPath: string;
+      readonly expected: ConfigExpectation;
+      readonly run: CleanupRunSpec;
+      readonly point: AcceptanceCrashPoint;
+    }
+  | {
+      readonly action: "acceptance-recover";
+      readonly configPath: string;
+      readonly expected: ConfigExpectation;
+      readonly run: CleanupRunSpec;
+      readonly conflictId: string;
+      readonly destination: string;
     }
   | {
       readonly action: "plan-adoption" | "apply-adoption";
@@ -239,6 +274,38 @@ export class ProcessDistributedExecutor implements DistributedExecutor {
     );
   }
 
+  public async crashSync(
+    machine: DistributedMachineSpec,
+    config: ProductConfig,
+    run: CleanupRunSpec,
+    point: AcceptanceCrashPoint,
+  ): Promise<void> {
+    await callAgent(machine, {
+      action: "acceptance-sync-crash",
+      configPath: machine.configPath,
+      expected: expectation(config),
+      run,
+      point,
+    });
+  }
+
+  public async recoverAcceptanceConflict(
+    machine: DistributedMachineSpec,
+    config: ProductConfig,
+    run: CleanupRunSpec,
+    conflictId: string,
+    destination: string,
+  ): Promise<void> {
+    await callAgent(machine, {
+      action: "acceptance-recover",
+      configPath: machine.configPath,
+      expected: expectation(config),
+      run,
+      conflictId,
+      destination,
+    });
+  }
+
   public async cutover(
     machine: DistributedMachineSpec,
     config: ProductConfig,
@@ -357,6 +424,39 @@ export async function runDistributedAgent(request: unknown): Promise<unknown> {
       const config = expectedLocalConfig(input.configPath, input.expected);
       return syncFolderV3(config);
     }
+    case "acceptance-sync-crash": {
+      const config = expectedLocalConfig(input.configPath, input.expected);
+      assertAcceptancePeer(config, input.run);
+      if (
+        input.point !== "after-outbox" &&
+        input.point !== "after-hub-accept" &&
+        input.point !== "after-moves-staged"
+      )
+        throw new Error("Acceptance crash point is invalid");
+      return syncFolderV3(config, {
+        fault: (point) => {
+          if (point !== input.point) return;
+          writeFileSync(
+            acceptanceCrashMarker(config.stateDir, input.point),
+            `${JSON.stringify({ point })}\n`,
+            { mode: 0o600, flag: "wx" },
+          );
+          process.kill(process.pid, "SIGKILL");
+        },
+      });
+    }
+    case "acceptance-recover": {
+      const config = expectedLocalConfig(input.configPath, input.expected);
+      assertAcceptancePeer(config, input.run);
+      const destination = resolve(input.destination);
+      if (!destination.startsWith(`${resolve(config.stateDir)}${sep}`))
+        throw new Error(
+          "Acceptance recovery must remain in private peer state",
+        );
+      assertRealAncestors(config.stateDir, destination);
+      recoverConflictV3(config, input.conflictId, destination);
+      return { recovered: true };
+    }
     case "cutover": {
       const current = loadConfig(input.configPath);
       if (
@@ -424,13 +524,17 @@ async function callAgent(
         new Error(`Distributed agent could not start: ${machine.machineId}`),
       ),
     );
-    child.on("close", (status) => {
+    child.on("close", (status, signal) => {
       if (bytes > 64 * 1024 * 1024) {
         reject(
           new Error(
             `Distributed agent output exceeded limit: ${machine.machineId}`,
           ),
         );
+        return;
+      }
+      if (signal !== null) {
+        reject(new DistributedAgentTermination(signal));
         return;
       }
       if (status !== 0) {
@@ -460,6 +564,21 @@ function childFailureDetail(stderr: string): string {
   return normalized.length === 0
     ? "no stderr"
     : normalized.slice(Math.max(0, normalized.length - 4_096));
+}
+
+function assertAcceptancePeer(
+  config: ProductConfig,
+  run: CleanupRunSpec,
+): void {
+  const root = validateCleanupRunRoot(run);
+  if (realpathSync(root) !== root)
+    throw new Error("Acceptance run root must be physical");
+  for (const path of [config.root, config.stateDir])
+    if (
+      !resolve(path).startsWith(`${root}${sep}`) ||
+      realpathSync(path) !== resolve(path)
+    )
+      throw new Error("Acceptance peer must remain inside its physical run");
 }
 
 function expectedLocalConfig(
@@ -499,6 +618,8 @@ function agentRequest(value: unknown): AgentRequest {
     action !== "apply-adoption" &&
     action !== "verify" &&
     action !== "sync" &&
+    action !== "acceptance-sync-crash" &&
+    action !== "acceptance-recover" &&
     action !== "cutover"
   )
     throw new Error("Distributed agent action is invalid");

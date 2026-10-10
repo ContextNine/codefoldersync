@@ -107,6 +107,7 @@ export interface AdoptionApplyOptions {
 export type NormalApplyFaultPoint =
   | "after-outbox"
   | "after-upload"
+  | "after-hub-accept"
   | "after-local-publish"
   | "after-apply-journal"
   | "after-moves-staged"
@@ -524,11 +525,12 @@ export async function syncFolderV3(
     throw new Error(
       "Default-branch synchronization requires an adopted context baseline",
     );
+  const queuedCatalog = queuedScanReferences(config, state);
   let local = scanNamespace(
     config,
     objects,
     ignore,
-    state.catalog(),
+    queuedCatalog,
     false,
     false,
     config.syncPolicy.mode === "default-branch" && baseline !== null
@@ -620,7 +622,10 @@ export async function syncFolderV3(
       baseline = prepared.baseline;
       workingCheckpoint = prepared.accepted;
       const catalog = new Map(
-        state.catalog().map((entry) => [entry.path, entry]),
+        [...queuedCatalog, ...state.catalog()].map((entry) => [
+          entry.path,
+          entry,
+        ]),
       );
       for (const entry of prepared.catalog) catalog.set(entry.path, entry);
       local = scanNamespace(
@@ -797,7 +802,11 @@ export async function syncFolderV3(
         signedSnapshot(config, state, objects, proposal, checkpoint, conflicts),
         [...required],
         (point) => {
-          if (point === "after-outbox" || point === "after-upload")
+          if (
+            point === "after-outbox" ||
+            point === "after-upload" ||
+            point === "after-hub-accept"
+          )
             options.fault?.(point);
         },
         () => assertRepositoryContexts(config, local.manifest, desired, scope),
@@ -1461,6 +1470,38 @@ async function resumeOutbox(
     }
   }
   return checkpoint;
+}
+
+/** A crashed publisher's new node identities are durable in its signed outbox. */
+function queuedScanReferences(
+  config: ProductConfig,
+  state: LocalState,
+): readonly CatalogEntry[] {
+  const catalog = state.catalog();
+  const queued = state.outbox();
+  if (queued.length === 0) return catalog;
+  const localPeer = config.peers.find((peer) => peer.peerId === config.peerId);
+  if (localPeer === undefined)
+    throw new Error("Queued publisher is not enrolled");
+  const references = new Map(catalog.map((entry) => [entry.nodeId, entry]));
+  for (const record of queued) {
+    const pending = record.value as SignedSnapshot;
+    if (
+      pending.peerId !== config.peerId ||
+      pending.eventId !== record.eventId ||
+      pending.snapshot?.folderId !== config.folderId ||
+      !verifyPayload(
+        snapshotPayload(pending),
+        pending.signature,
+        localPeer.publicKey,
+      )
+    )
+      throw new Error("Queued scan reference is not the local signed proposal");
+    validateNamespacePolicy(pending.snapshot, config);
+    for (const entry of pending.snapshot.entries)
+      if (!references.has(entry.nodeId)) references.set(entry.nodeId, entry);
+  }
+  return [...references.values()];
 }
 
 async function fetchSnapshotObjects(

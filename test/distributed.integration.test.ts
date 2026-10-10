@@ -1108,7 +1108,22 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
       assert.equal(result.normalSync.noChangePeers, 3);
       assert.equal(result.normalSync.noChangeUploadedObjects, 0);
       assert.equal(result.normalSync.noChangePublished, false);
+      assert.deepEqual(result.faults.processCrashes, [
+        "after-outbox",
+        "after-hub-accept",
+        "after-moves-staged",
+      ]);
+      assert.equal(result.faults.unknownAcknowledgementRetried, true);
+      assert.equal(result.faults.directoryMoveUploadedObjects, 0);
+      assert.equal(result.faults.concurrentConflictPreservedAndRecovered, true);
+      assert.equal(result.faults.hubOutageRejectedAndResumed, true);
+      assert.equal(result.faults.corruptionRejectedBySyncAndVerifier, true);
+      assert.equal(result.faults.repairedCorruptionConverged, true);
     }
+    assert.equal(
+      results[0]?.faults.scenarioDigest,
+      results[1]?.faults.scenarioDigest,
+    );
     assert.equal(
       results[0]?.workload.cassetteDigest,
       results[1]?.workload.cassetteDigest,

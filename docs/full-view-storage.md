@@ -50,6 +50,39 @@ Each repetition clones the closed, protected `objects.sqlite` with `--reflink=al
 
 The external controller creates and formats only a new exclusive-created image, owns namespace/process lifetime, restores the full historical masters, and builds the template. It must stop all children and unmount before outer-root cleanup. The product does not mount, format, elevate privileges, or install a permanent filesystem. This storage support is not a completed original-archive campaign, native fleet test, or real-folder stress result.
 
+## Full-tree fault stages
+
+`src/v3/acceptance-faults.ts` runs inside each fresh pseudo-fleet repetition after
+initial adoption and workload convergence. It keeps every adopted path available;
+its generated probes are mutations within that complete corpus, not replacement
+input trees. All probe operations contribute to a deterministic scenario digest.
+
+The packaged product processes are killed with `SIGKILL` after durable outbox
+creation, hub acceptance before acknowledgement, and move staging. A private
+phase marker and the actual child termination signal prove the boundary. Restart
+must drain queued work, retry an already accepted event without a new sequence,
+and finish the journaled subtree move. The move must upload zero objects.
+
+Concurrent writes must retain the first accepted bytes and the exact losing bytes
+in a visible conflict sibling on every peer. The losing peer also recovers the
+immutable conflict privately through its packaged agent. The outage stage moves
+only the run-owned hub aside and temporarily puts an exact marker at its configured
+path. Sync and verification must reject that unavailable hub without losing the
+offline edit. The exact marker is removed and the held hub restored before retry.
+
+The corruption stage damages only the newly generated canary's known chunk in
+the disposable hub database. A target that lacks that chunk must reject apply,
+and its force verifier must reject the missing canary. The runner repairs that
+exact probe chunk before requiring complete convergence. Final force verification
+and the no-change pass still cover every peer's entire included namespace.
+
+Crash and recovery agent actions require an exact disposable-run sentinel and
+physical contained peer roots. Recovery destinations stay below private peer
+state with checked ancestors. Results contain only counts, pass flags, crash
+phases, and the scenario digest, never probe contents or real archived paths.
+These stages do not substitute for the remaining native write/fsync, sustained
+churn, Git-state, AI/replay, and machine-platform gates.
+
 ## Historical full-archive controller
 
 After building and verifying the candidate, run the external controller inside a fresh private mount namespace:

@@ -4,7 +4,7 @@ V3 never performs line merge or timestamp last-writer-wins.
 
 ## Adoption conflicts
 
-During adoption the source checkpoint is always canonical. Target-only, divergent, type-conflicting, and divergent Git paths move outside the synchronized root before source materialization. Each retained record names the original target path, recovery path, peer, reason, and recoverable manifest when one exists.
+During adoption the source checkpoint is canonical within the selected eligible scope. Target-only, divergent, and type-conflicting working paths move outside the synchronized root before source materialization. Each retained record names the original target path, recovery path, peer, reason, and recoverable manifest when one exists. Git metadata and suspended repository scopes stay local.
 
 Adoption does not create conflict siblings inside the authority tree. It can therefore converge every included live target path exactly while preserving all displaced evidence.
 
@@ -22,13 +22,17 @@ The name uses peer identity and immutable event identity, not a clock. The sibli
 
 The three-way merge compares accepted baseline, local scan, and current hub state. A remote mutation remains canonical. Losing leaf bytes receive a sibling; losing deletes remain explicit conflict evidence. Parent directories required by a preserved sibling are restored from a verified side.
 
-Stable node IDs allow an uncontested subtree move without descendant uploads. A losing directory version receives one visible sibling plus an immutable subtree manifest containing every included descendant and nested Git boundary, so recovery does not depend on the sibling remaining live. An ambiguous concurrent structural case is never allowed to overwrite stable content; it yields explicit evidence or an inconclusive result.
+Stable node IDs allow an uncontested subtree move without descendant uploads. A losing directory version receives one visible sibling plus an immutable subtree manifest containing every included descendant, so recovery does not depend on the sibling remaining live. An ambiguous concurrent structural case is never allowed to overwrite stable content; it yields explicit evidence or an inconclusive result.
 
 Normal conflicts are signed inside the publishing snapshot and commit atomically with that checkpoint. A crash cannot accept canonical content while omitting its recovery record.
 
-## Git conflicts
+## Local Git state
 
-Git boundaries are complete immutable manifests. A concurrent losing Git state is recorded with its manifest rather than merged file by file. Current V3 exposes recovery evidence and does not provide the removed V2 `resolve-git` command.
+Git metadata is not synchronized or conflict-merged. Default-branch working files
+pause independently when repository identity, branch, or HEAD differs. Selected
+files follow their allowlist across branches without changing checkout, index,
+remotes, or hooks. Retained old-context events and interrupted applies are private
+recovery evidence, not Git metadata conflict copies.
 
 ## Operator workflow
 

@@ -312,6 +312,26 @@ test("default-branch peers transfer edits only within a matching Git context", a
       );
       assert.equal(git(target.root, "rev-parse", "HEAD"), targetHead);
 
+      for (const point of ["after-outbox", "after-hub-accept"] as const) {
+        const path = `restart-${point}.ts`;
+        const bytes = `export const recovered = ${JSON.stringify(point)};\n`;
+        writeFileSync(join(source.root, path), bytes, {
+          mode: 0o600,
+          flag: "wx",
+        });
+        crashApplying(source, point);
+        const interrupted = await statusV3(source);
+        assert.equal(interrupted.outboxEntries, 1);
+        const restarted = await syncFolderV3(source);
+        assert.equal(restarted.status, "clean", JSON.stringify(restarted));
+        if (point === "after-hub-accept")
+          assert.equal(restarted.hubSequence, interrupted.hubSequence);
+        assert.equal((await statusV3(source)).outboxEntries, 0);
+        assert.equal((await syncFolderV3(target)).status, "clean");
+        assert.equal(readFileSync(join(target.root, path), "utf8"), bytes);
+        assert.equal(git(target.root, "rev-parse", "HEAD"), targetHead);
+      }
+
       // A normal editor's atomic save keeps the logical file, not its old inode.
       writeFileSync(
         join(source.root, "atomic-save.tmp"),

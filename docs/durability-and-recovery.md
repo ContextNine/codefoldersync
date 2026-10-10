@@ -27,6 +27,14 @@ verified local objects
 
 The hub verifies the peer signature over the snapshot, explicit mutations, peer sequence, and normal conflicts, then commits them in one SQLite transaction. If an acknowledgement is lost after commit, retry returns the original event sequence. If a different peer advanced the hub first, the stale serialization is replaced only after the live proposal remains available for three-way merge.
 
+A publisher can die before new leaf identities reach its accepted catalog.
+Restart authenticates its queued proposals against the enrolled local public key
+and adds their new node observations to the scan references. These references
+survive the current Git-context preparation and outbox acknowledgement, but do
+not advance the accepted baseline, cursor, or catalog history. A newly created
+file therefore retains its queued identity instead of becoming a second create
+or a false concurrent conflict after an unknown acknowledgement.
+
 Default-branch queues also retain their repository context. When any scope is suspended, the engine keeps mixed-context queued records private and publishes eligible sibling changes as fresh CAS events. It does not retry the old mixed snapshot in a different checkout. Returning to the matching context permits normal idempotent retry or stale-CAS reconciliation. There is no automatic immutable-object cleanup.
 
 A changed HEAD moves the exact queued event and its object closure from `outbox` to `held_outbox` in one SQLite transaction. The engine never replays a held event. `recover-held <event-id> --path <relative-leaf>` verifies the enrolled signature and immutable manifest, then materializes one retained version under owner-only private state. It does not alter the current checkout. Publication rechecks active and enclosing Git contexts after object upload and before accepting the signed event.

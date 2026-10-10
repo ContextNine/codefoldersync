@@ -22,6 +22,10 @@ import {
   type DistributedFleetSpec,
 } from "./distributed.js";
 import { ProcessDistributedExecutor } from "./distributed-process.js";
+import {
+  runAcceptanceFaults,
+  type AcceptanceFaultResult,
+} from "./acceptance-faults.js";
 import { readEnrollmentRequest } from "./setup.js";
 import { loadConfig } from "./config.js";
 import { compileIgnore, defaultIgnore } from "./ignore.js";
@@ -88,6 +92,7 @@ export interface PseudoFleetRunResult {
     readonly allTargetsConvergedMs: number;
   };
   readonly conflicts: number;
+  readonly faults: AcceptanceFaultResult;
   readonly normalSync: {
     readonly execution: "packaged-peer-processes";
     readonly noChangePeers: number;
@@ -450,6 +455,12 @@ async function runPseudoFleetRepetition(
       throw new Error(`Pseudo-fleet target sync failed: ${target.machineId}`);
   }
   const allTargetsConvergedMs = performance.now() - workloadStarted;
+  const faults = await runAcceptanceFaults({
+    fleet: distributed,
+    executor,
+    run: { schemaVersion: 1, runId: spec.runId, runRoot: spec.runRoot },
+    seed: spec.seed,
+  });
   const sourceVerification = await executor.verify(
     distributed.authority,
     loadConfig(authorityPath),
@@ -510,6 +521,7 @@ async function runPseudoFleetRepetition(
       allTargetsConvergedMs: milliseconds(allTargetsConvergedMs),
     },
     conflicts,
+    faults,
     normalSync: {
       execution: "packaged-peer-processes",
       noChangePeers: allMachines.length,

@@ -69,6 +69,7 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 | `src/v3/setup.ts`                             | Authority setup and target-local enrollment                                 |
 | `src/v3/distributed.ts`                       | Resumable multi-machine setup and per-target approval                       |
 | `src/v3/acceptance.ts`                        | Witnessed two-run real-snapshot pseudo-fleet execution                      |
+| `src/v3/acceptance-faults.ts`                 | Full-corpus process-crash, move, conflict, outage, and corruption scenarios |
 | `src/v3/acceptance-reflink.ts`                | Private bounded-volume validation and immutable object seeding              |
 | `scripts/run_bounded_archived_acceptance.mjs` | Sequential historical Drive restores and bounded full-tree runner lifecycle |
 | `src/v3/backup.ts`                            | Streaming encrypted capture and portable/platform recovery oracles          |
