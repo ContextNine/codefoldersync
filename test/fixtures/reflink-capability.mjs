@@ -13,6 +13,7 @@ import {
   readFileSync,
   readlinkSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -62,6 +63,9 @@ const mountpoint = join(root, "filesystem");
 let mounted = false;
 const residue = mkdtempSync(join(tmpdir(), "codefoldersync-reflink-residue-"));
 chownSync(residue, uid, gid);
+const controllerFixture = mkdtempSync(
+  join(tmpdir(), "codefoldersync-controller-public-"),
+);
 try {
   writeFileSync(join(root, "SENTINEL"), sentinel, { mode: 0o600 });
   chownSync(join(root, "SENTINEL"), uid, gid);
@@ -323,6 +327,171 @@ console.log(JSON.stringify(results));`;
       ),
     );
   assert.throws(() => lstatSync(runRoot), { code: "ENOENT" });
+
+  writeFileSync(
+    join(controllerFixture, "SENTINEL"),
+    "public-archived-controller-fixture\n",
+    { mode: 0o600 },
+  );
+  const identity = join(controllerFixture, "fixture.agekey");
+  command("age-keygen", ["--output", identity]);
+  const recipient = command("age-keygen", ["--y", identity]).trim();
+  const sources = [];
+  for (const machineId of ["mattbook", "wootbook", "workermacair"]) {
+    const bundle = join(controllerFixture, machineId);
+    mkdirSync(bundle, { mode: 0o700 });
+    const archiveName = `${machineId}-code.tar.zst.age`;
+    const archive = join(bundle, archiveName);
+    command("bash", [
+      "-o",
+      "pipefail",
+      "-c",
+      'tar -cf - -C "$1" Code | zstd --quiet --stdout | age --recipient "$2" --output "$3"',
+      "public-fixture",
+      master,
+      recipient,
+      archive,
+    ]);
+    const bytes = lstatSync(archive).size;
+    const sha256 = createHash("sha256")
+      .update(readFileSync(archive))
+      .digest("hex");
+    writeFileSync(
+      join(bundle, "witness.json"),
+      JSON.stringify({
+        schema_version: 1,
+        snapshot_id: "public-controller-snapshot",
+        machine_id: machineId,
+        artifacts: [{ name: archiveName, size: bytes, sha256 }],
+      }),
+      { mode: 0o600 },
+    );
+    sources.push({
+      machineId,
+      archiveName,
+      bytes,
+      sha256,
+      recoveryVerified: true,
+      remoteDownloadedContentVerified: true,
+      witness: masters[0].witness,
+    });
+  }
+  const candidateDirectory = join(controllerFixture, "candidate");
+  command("python3", [
+    join(repository, "scripts/build_release.py"),
+    "--output-dir",
+    candidateDirectory,
+  ]);
+  const candidateArchive = join(
+    candidateDirectory,
+    "codefoldersync-0.3.0.tar.gz",
+  );
+  const candidateSha256 = createHash("sha256")
+    .update(readFileSync(candidateArchive))
+    .digest("hex");
+  const controllerSpec = join(controllerFixture, "controller-spec.json");
+  writeFileSync(
+    controllerSpec,
+    JSON.stringify({
+      schemaVersion: 1,
+      corpus: "public-fixture",
+      runId: "public-controller-fixture",
+      snapshotId: "public-controller-snapshot",
+      uid,
+      gid,
+      inheritedMountNamespace: inheritedNamespace,
+      identityPath: identity,
+      candidateArchive,
+      candidateSha256,
+      sources,
+      allocationLimitBytes: 512 * 1024 ** 2,
+      seed: "public-controller-only",
+      runParent: tmpdir(),
+      retainedRoots: [controllerFixture, residue],
+      evidenceDirectory: join(controllerFixture, "controller-evidence"),
+      downloadCommand: [
+        realpathSync("/usr/bin/sudo"),
+        "-n",
+        "nsenter",
+        "--mount",
+        "--target",
+        "1",
+        "setpriv",
+        `--reuid=${uid}`,
+        `--regid=${gid}`,
+        "--clear-groups",
+        process.execPath,
+        join(repository, "test/fixtures/copy-download.mjs"),
+        controllerFixture,
+      ],
+    }),
+    { mode: 0o600 },
+  );
+  ownTree(controllerFixture);
+  const controllerResult = JSON.parse(
+    command(process.execPath, [
+      join(repository, "scripts/run_bounded_archived_acceptance.mjs"),
+      "controller",
+      controllerSpec,
+    ]),
+  );
+  assert.equal(controllerResult.passed, true);
+  assert.equal(controllerResult.cleaned, true);
+  const controllerEvidence = JSON.parse(
+    readFileSync(
+      join(controllerFixture, "controller-evidence/controller-result.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(controllerEvidence.acceptanceCorpus, false);
+  assert.equal(controllerEvidence.historicalTrees.length, 3);
+  assert.equal(controllerEvidence.repetitions.length, 2);
+  assert.ok(controllerEvidence.maximumTotalBytes <= 512 * 1024 ** 2);
+  const failureSpec = join(controllerFixture, "failure-spec.json");
+  const failedEvidence = join(controllerFixture, "failed-evidence");
+  const originalControllerSpec = JSON.parse(
+    readFileSync(controllerSpec, "utf8"),
+  );
+  writeFileSync(
+    failureSpec,
+    JSON.stringify({
+      ...originalControllerSpec,
+      runId: "public-controller-failure",
+      evidenceDirectory: failedEvidence,
+      downloadCommand: [
+        ...originalControllerSpec.downloadCommand,
+        "--corrupt-download",
+      ],
+    }),
+    { mode: 0o600 },
+  );
+  chownSync(failureSpec, uid, gid);
+  const rejected = spawnSync(
+    process.execPath,
+    [
+      join(repository, "scripts/run_bounded_archived_acceptance.mjs"),
+      "controller",
+      failureSpec,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(rejected.status, 1);
+  const rejectedEvidence = JSON.parse(
+    readFileSync(join(failedEvidence, "controller-result.json"), "utf8"),
+  );
+  assert.equal(rejectedEvidence.passed, false);
+  assert.equal(rejectedEvidence.cleaned, true);
+  for (const source of sources)
+    assert.equal(
+      createHash("sha256")
+        .update(
+          readFileSync(
+            join(controllerFixture, source.machineId, source.archiveName),
+          ),
+        )
+        .digest("hex"),
+      source.sha256,
+    );
   command("sync", ["-f", mountpoint]);
   command("fstrim", [mountpoint]);
   const imageAllocatedBytes = lstatSync(image).blocks * 512;
@@ -349,6 +518,12 @@ console.log(JSON.stringify(results));`;
       boundedRunnerConverged: true,
       boundedRunnerCleanup: true,
       objectsPreseeded: true,
+      historicalControllerFixture: true,
+      outsideNamespaceDownloads: true,
+      sequentialCiphertextSlotsCleaned: true,
+      controllerVolumeCleaned: true,
+      corruptedDownloadRejectedAndCleaned: true,
+      originalFixtureCiphertextUnchanged: true,
       acceptanceCorpus: false,
     }) + "\n",
   );
@@ -358,4 +533,5 @@ console.log(JSON.stringify(results));`;
   assert.ok(lstatSync(root).isDirectory() && !lstatSync(root).isSymbolicLink());
   rmSync(root, { recursive: true });
   rmSync(residue, { recursive: true });
+  rmSync(controllerFixture, { recursive: true });
 }
