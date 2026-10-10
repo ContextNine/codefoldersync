@@ -99,6 +99,7 @@
   },
   "mattbookNativePreflight": {
     "sshConnected": false,
+    "macAirToMattbookSshConnected": false,
     "failure": "connection-timeout",
     "attemptExited": true,
     "candidateStaged": false
