@@ -45,6 +45,7 @@ import {
   previewIgnoreRevisionV3,
   promoteConflictV3,
   recoverConflictV3,
+  recoverHeldFileV3,
   sealSourceV3,
   statusV3,
   syncFolderV3,
@@ -209,6 +210,24 @@ async function main(): Promise<void> {
     case "promote-conflict":
       await runRecover(args, command === "promote-conflict");
       return;
+    case "recover-held": {
+      const eventId = positional(args, 0);
+      if (eventId === undefined)
+        throw new Error(
+          "Held recovery requires <event-id> --path <relative-file>",
+        );
+      const config = load(args);
+      const destination = await withExclusiveWriter(config, async () =>
+        recoverHeldFileV3(config, eventId, requiredOption(args, "--path")),
+      );
+      printJson({
+        recovered: true,
+        eventId,
+        destination,
+        liveCheckoutChanged: false,
+      });
+      return;
+    }
     case "daemon":
       await runDaemon(args);
       return;
@@ -1201,6 +1220,7 @@ function positional(
     "--ignore",
     "--adoption-id",
     "--to",
+    "--path",
     "--built",
     "--install-root",
     "--bin-dir",
@@ -1385,6 +1405,7 @@ Commands:
   codefoldersync config update-ignore --previous-ignore <path> [--approve]
   codefoldersync catalog status [--config <path>]
   codefoldersync recover <conflict-id> --to <absent-path>
+  codefoldersync recover-held <event-id> --path <relative-file>
   codefoldersync promote-conflict <conflict-id> [--to <relative-absent-path>]
   codefoldersync service <install|start|stop|restart|status|logs|uninstall>
   codefoldersync acceptance witness --root <path>

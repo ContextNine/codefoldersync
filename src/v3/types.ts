@@ -199,11 +199,19 @@ export interface GitStateMutation extends MutationBase {
   readonly contentVersion: string | null;
 }
 
+export interface RepositoryContextMutation extends MutationBase {
+  readonly kind: "repository-context";
+  readonly path: string;
+  readonly entryVersion: string;
+  readonly contentVersion: string;
+}
+
 export type NamespaceMutation =
   | PutNodeMutation
   | MoveEntryMutation
   | DeleteEntryMutation
   | RestoreEntryMutation
+  | RepositoryContextMutation
   | GitStateMutation;
 
 export interface SignedSnapshot {

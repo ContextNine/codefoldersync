@@ -22,7 +22,23 @@ During default-branch apply, private Git index, HEAD, and current branch-ref loc
 
 Mixed-context outbox records remain private while a repository is suspended. Eligible siblings can publish a fresh proposal against the current hub sequence. Returning to the original context resumes the existing CAS retry/merge flow without replaying a stale accepted version over newer sibling work. Immutable objects remain retained.
 
-Development gates still open: advancing a context after Git commits without permanently pinning the original HEAD, and isolating a suspended repository inside an already interrupted multi-repository apply. A pending apply currently stops recovery for the folder if any of its active or enclosing contexts changed. Additional context-transition coverage and obsolete Git-mirroring removal remain required. Do not activate this development build on a daily-driver workspace before those gates and real-folder acceptance pass.
+## Commits and queued work
+
+A peer on the configured default branch may advance an accepted HEAD only when its local Git history proves the old HEAD is an ancestor. An older or divergent checkout remains paused; it cannot roll the hub backward. A newly discovered committed repository can establish a new context. Replacing an enrolled repository's identity requires fresh adoption.
+
+For an advanced or newly encountered context, the engine reads the committed tree through a bounded `git cat-file` stream and builds a private immutable baseline. It scans the actual checkout against that baseline, preserving edits and deletions relative to the new commit. A peer that independently reaches the accepted HEAD starts from that commit's tree before receiving dirty work. CodeFolderSync does not fetch, merge, check out, stage, or copy Git metadata in this workflow. Untracked concurrent creations retain both versions when their contents differ.
+
+Queued events from a previous HEAD move atomically into `held_outbox`. Their exact signed snapshots and objects remain private and never replay into the new checkout. Status reports the retained count. Recover one leaf without changing the live checkout:
+
+```sh
+codefoldersync recover-held <event-id> --path path/to/file
+```
+
+The command verifies the retained event and writes an absent destination under private state. It reports only the event ID and destination. ENV values never enter output.
+
+Capture and publication recheck Git context after asynchronous object transfer and immediately before hub acceptance. A checkout during upload leaves the event queued, not accepted in the wrong context.
+
+Development gates still open: isolating a suspended repository inside an already interrupted multi-repository apply, and removing obsolete Git-mirroring implementation. A pending apply currently stops recovery for the folder if any of its active or enclosing contexts changed. Do not activate this development build on a daily-driver workspace before those gates and real-folder acceptance pass.
 
 ## Selected files only
 
@@ -54,6 +70,6 @@ Plaintext ENV transfer needs a separate custody decision for the exact workspace
 
 ## Acceptance
 
-The policy integration lane exercises ENV sharing across independently selected branches, retained code/index/HEAD, nested ENV creation and deletion beside local-only files, and visible concurrent-value recovery. Its default-branch scenario covers matching contexts, independently paused nested roots, reverse sibling publication, an unborn/locked sibling, native checkout exclusion, mixed-context queues, and real SIGKILL/restart with a partial apply. Existing grouped product integration scenarios cover adoption, durable apply, structural changes, corruption, and conflicts with independent Git state.
+The policy integration lane exercises ENV sharing across independently selected branches, retained code/index/HEAD, nested ENV creation and deletion beside local-only files, and visible concurrent-value recovery. Its default-branch scenario covers matching contexts, independently paused nested roots, reverse sibling publication, an unborn/locked sibling, native checkout exclusion, mixed-context queues, atomic saves, checkout during upload, and real SIGKILL/restart with a partial apply. It also checks an independent Git fast-forward followed by dirty edit/deletion transfer, exact binary and symlink materialization, unchanged staging, and private recovery of the old queued version. Existing grouped product integration scenarios cover adoption, durable apply, structural changes, corruption, and conflicts with independent Git state.
 
 These focused cases do not prove release acceptance. Full archived Code trees, native-machine checks, and real-folder stress results are separate evidence in the rollout plan. Passing them requires the final candidate, not an older build's checkpoint.

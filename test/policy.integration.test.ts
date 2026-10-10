@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -23,6 +24,8 @@ import {
 import {
   applyAdoptionV3,
   cutoverAdoptionV3,
+  statusV3,
+  recoverHeldFileV3,
   planAdoptionV3,
   sealSourceV3,
   syncFolderV3,
@@ -304,6 +307,51 @@ test("default-branch peers transfer edits only within a matching Git context", a
       );
       assert.equal(git(target.root, "rev-parse", "HEAD"), targetHead);
 
+      // A normal editor's atomic save keeps the logical file, not its old inode.
+      writeFileSync(
+        join(source.root, "atomic-save.tmp"),
+        "export const value = 22;\n",
+      );
+      renameSync(
+        join(source.root, "atomic-save.tmp"),
+        join(source.root, "source.ts"),
+      );
+      assert.equal((await syncFolderV3(source)).status, "clean");
+      assert.equal((await syncFolderV3(target)).status, "clean");
+      assert.equal(
+        readFileSync(join(target.root, "source.ts"), "utf8"),
+        "export const value = 22;\n",
+      );
+
+      // A checkout after upload cannot authorize an event in the wrong context.
+      const beforeRace = await statusV3(target);
+      writeFileSync(
+        join(target.root, "source.ts"),
+        "export const uploadRace = true;\n",
+      );
+      const uploadRace = await syncFolderV3(target, {
+        fault(point) {
+          if (point === "after-upload")
+            git(target.root, "switch", "-c", "upload-race");
+        },
+      });
+      assert.equal(uploadRace.status, "inconclusive");
+      const queuedRace = await statusV3(target);
+      assert.equal(queuedRace.hubSequence, beforeRace.hubSequence);
+      assert.equal(queuedRace.outboxEntries, 1);
+      assert.equal(
+        git(target.root, "symbolic-ref", "--short", "HEAD"),
+        "upload-race",
+      );
+      assert.equal((await syncFolderV3(target)).status, "inconclusive");
+      git(target.root, "switch", "master");
+      assert.equal((await syncFolderV3(target)).status, "clean");
+      assert.equal((await syncFolderV3(source)).status, "clean");
+      assert.equal(
+        readFileSync(join(source.root, "source.ts"), "utf8"),
+        "export const uploadRace = true;\n",
+      );
+
       writeFileSync(
         join(source.root, "source.ts"),
         "export const value = 20;\n",
@@ -582,12 +630,142 @@ test("default-branch peers transfer edits only within a matching Git context", a
         readFileSync(join(scratch, ".git", "index.lock"), "utf8"),
         "synthetic-lock\n",
       );
+      writeFileSync(
+        join(target.root, "source.ts"),
+        "export const oldQueuedContext = 300;\n",
+      );
+      const oldQueued = await syncFolderV3(target, {
+        fault(point) {
+          if (point === "after-outbox")
+            throw new Error("Synthetic outage before a commit transition");
+        },
+      });
+      assert.equal(oldQueued.status, "inconclusive");
+      {
+        using state = new LocalState(target);
+        assert.equal(state.outbox().length, 1);
+      }
+      writeFileSync(
+        join(target.root, "source.ts"),
+        "export const value = 3;\n",
+      );
+      writeFileSync(
+        join(target.root, "committed.ts"),
+        "export const committedThenDeleted = true;\n",
+      );
+      writeFileSync(
+        join(target.root, "committed.bin"),
+        Buffer.alloc(256 * 1024 + 77, 0x4b),
+      );
+      symlinkSync("source.ts", join(target.root, "committed.link"));
+      git(
+        target.root,
+        "add",
+        "source.ts",
+        "committed.ts",
+        "committed.bin",
+        "committed.link",
+      );
       git(target.root, "commit", "-m", "target advances independently");
       const advancedHead = git(target.root, "rev-parse", "HEAD");
-      const paused = await syncFolderV3(target);
-      assert.equal(paused.status, "inconclusive");
-      assert.match(paused.reasons.join(" "), /HEAD differs/u);
+      rmSync(join(target.root, "committed.ts"));
+      writeFileSync(
+        join(target.root, "source.ts"),
+        "export const value = 4;\n",
+      );
+      const advanced = await syncFolderV3(target);
+      assert.equal(advanced.published, true, JSON.stringify(advanced));
+      {
+        using state = new LocalState(target);
+        assert.equal(state.outbox().length, 0);
+        assert.equal(state.heldOutbox().length, 1);
+        const held = state.heldOutbox()[0];
+        assert.ok(held);
+        const recovered = recoverHeldFileV3(target, held.eventId, "source.ts");
+        assert.equal(
+          readFileSync(recovered, "utf8"),
+          "export const oldQueuedContext = 300;\n",
+        );
+        assert.equal(
+          readFileSync(join(target.root, "source.ts"), "utf8"),
+          "export const value = 4;\n",
+        );
+      }
       assert.equal(git(target.root, "rev-parse", "HEAD"), advancedHead);
+      const olderPeer = await syncFolderV3(source);
+      assert.equal(olderPeer.status, "inconclusive", JSON.stringify(olderPeer));
+      assert.equal(
+        readFileSync(join(source.root, "source.ts"), "utf8"),
+        "export const value = 3;\n",
+      );
+
+      // Git advances independently. A clean new checkout receives only dirty work.
+      git(source.root, "restore", "source.ts");
+      git(source.root, "fetch", target.root, "master");
+      git(source.root, "merge", "--ff-only", "FETCH_HEAD");
+      const newIndex = readFileSync(join(source.root, ".git", "index"));
+      const caughtUp = await syncFolderV3(source);
+      synced(caughtUp);
+      assert.equal(
+        caughtUp.status,
+        "clean",
+        JSON.stringify(await statusV3(source)),
+      );
+      assert.equal(caughtUp.published, false);
+      assert.equal(
+        readFileSync(join(source.root, "source.ts"), "utf8"),
+        "export const value = 4;\n",
+      );
+      assert.equal(git(source.root, "rev-parse", "HEAD"), advancedHead);
+      assert.deepEqual(
+        readFileSync(join(source.root, ".git", "index")),
+        newIndex,
+      );
+      assert.deepEqual(
+        readFileSync(join(source.root, "committed.bin")),
+        Buffer.alloc(256 * 1024 + 77, 0x4b),
+      );
+      assert.equal(
+        readFileSync(join(source.root, "committed.link"), "utf8"),
+        "export const value = 4;\n",
+      );
+      assert.ok(
+        git(source.root, "status", "--porcelain")
+          .split("\n")
+          .some((line) => line.endsWith("committed.ts")),
+      );
+
+      const addedPath = "packages/added";
+      const addedSource = join(source.root, addedPath);
+      const addedTarget = join(target.root, addedPath);
+      mkdirSync(addedSource);
+      git(addedSource, "init", "-b", "master");
+      writeFileSync(join(addedSource, "new.ts"), "export const added = 1;\n");
+      git(addedSource, "add", "new.ts");
+      git(addedSource, "commit", "-m", "new independent repository");
+      const addedHead = git(addedSource, "rev-parse", "HEAD");
+      writeFileSync(join(addedSource, "new.ts"), "export const added = 2;\n");
+      assert.equal((await syncFolderV3(source)).published, true);
+      // Only the fixture performs clone/setup. Sync never creates Git metadata.
+      git(join(target.root, "packages"), "clone", addedSource, "added");
+      const addedIndex = readFileSync(join(addedTarget, ".git", "index"));
+      assert.equal((await syncFolderV3(target)).applied, true);
+      assert.equal(
+        readFileSync(join(addedTarget, "new.ts"), "utf8"),
+        "export const added = 2;\n",
+      );
+      assert.equal(git(addedTarget, "rev-parse", "HEAD"), addedHead);
+      assert.deepEqual(
+        readFileSync(join(addedTarget, ".git", "index")),
+        addedIndex,
+      );
+      writeFileSync(join(addedTarget, "new.ts"), "export const added = 3;\n");
+      assert.equal((await syncFolderV3(target)).published, true);
+      assert.equal((await syncFolderV3(source)).status, "clean");
+      assert.equal(
+        readFileSync(join(addedSource, "new.ts"), "utf8"),
+        "export const added = 3;\n",
+      );
     },
   );
 });

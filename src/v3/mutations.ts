@@ -127,6 +127,35 @@ export function deriveMutations(input: {
     });
   }
 
+  const baseContexts = new Map(
+    input.base?.repositories.map((value) => [value.path, value]) ?? [],
+  );
+  for (const context of input.next.repositories) {
+    const previous = baseContexts.get(context.path);
+    if (canonicalJson(previous) === canonicalJson(context)) continue;
+    mutations.push({
+      ...mutationBase(input, `repository:${hashJson(context.path)}`, undefined),
+      kind: "repository-context",
+      path: context.path,
+      baseEntryVersion:
+        previous === undefined
+          ? null
+          : hashJson({
+              path: previous.path,
+              identity: previous.identity,
+              branch: previous.branch,
+            }),
+      baseContentVersion:
+        previous === undefined ? null : hashJson(previous.head),
+      entryVersion: hashJson({
+        path: context.path,
+        identity: context.identity,
+        branch: context.branch,
+      }),
+      contentVersion: hashJson(context.head),
+    });
+  }
+
   return mutations
     .sort((left, right) =>
       `${left.nodeId}\0${left.kind}\0${"path" in left ? left.path : ""}`.localeCompare(

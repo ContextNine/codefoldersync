@@ -28,7 +28,7 @@ The semantic digest covers accepted paths, parent identities, stable node IDs, k
 
 ## Mutation events
 
-Each signed snapshot carries a monotonically increasing peer sequence and a deterministic ordered mutation list derived from the accepted base and proposed namespace. Mutation kinds are `put-node`, `move-entry`, `delete-entry`, `restore-entry`, and `git-state`.
+Each signed snapshot carries a monotonically increasing peer sequence and a deterministic ordered mutation list derived from the accepted base and proposed namespace. Mutation kinds are `put-node`, `move-entry`, `delete-entry`, `restore-entry`, and `repository-context`. Context mutations bind the repository path, identity, branch, and HEAD versions without transferring Git metadata.
 
 Every mutation records folder, peer, event and node identity; peer sequence; base configuration revision; base and resulting entry/publisher versions; affected paths; and the complete immutable object closure needed for the resulting node. Event history therefore preserves both whole-checkpoint evidence and explicit causal node operations. A restore may reuse a retained tombstoned node ID only when the same path and content version reappear.
 
@@ -48,18 +48,21 @@ Git metadata stays local. The signed policy validator rejects a nonempty Git-bou
 
 ## Local SQLite state
 
-| Table             | Purpose                                                       |
-| ----------------- | ------------------------------------------------------------- |
-| `meta`            | Accepted sequence and baseline digest                         |
-| `catalog`         | Rebuildable current stable-node observations                  |
-| `catalog_history` | Accepted placement/publisher version hashes and tombstones    |
-| `outbox`          | Exact signed event and object closure pending acknowledgement |
-| `journals`        | Rename, snapshot-apply, adoption, and cutover intent          |
-| `conflicts`       | Local recovery and visible conflict records                   |
+| Table             | Purpose                                                            |
+| ----------------- | ------------------------------------------------------------------ |
+| `meta`            | Accepted sequence and baseline digest                              |
+| `catalog`         | Rebuildable current stable-node observations                       |
+| `catalog_history` | Accepted placement/publisher version hashes and tombstones         |
+| `outbox`          | Exact signed event and object closure pending acknowledgement      |
+| `held_outbox`     | Previous-context signed events and objects retained without replay |
+| `journals`        | Rename, snapshot-apply, adoption, and cutover intent               |
+| `conflicts`       | Local recovery and visible conflict records                        |
 
 The complete accepted baseline snapshot also lives as owner-only `baseline.json` so three-way merge can distinguish local, remote, and concurrent change.
 
 With independently suspended repositories, this file retains their previous accepted local entries and contexts while eligible entries advance. The global cursor still names the latest accepted hub event; it does not imply that every suspended scope accepted that event. The derived catalog likewise retains suspended observations.
+
+After a verified Git-context advance, a temporary committed-tree baseline supplies stable node IDs while the actual checkout is captured again. The accepted baseline advances only through normal acceptance. Old-context queued events remain in `held_outbox`; their objects are not garbage-collected or inserted into the new checkout.
 
 A normal apply journal stores current/desired eligible manifests, the complete hub event's accepted digest and sequence, the recovery root, and its repository scope. Scope names all discovered/enrolled roots, eligible contexts, suspended reasons, and enclosing checkout guards. Recovery validates that journal scope and proves the complete accepted digest against hub history before applying its eligible projection.
 

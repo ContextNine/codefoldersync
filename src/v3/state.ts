@@ -55,6 +55,12 @@ export class LocalState implements Disposable {
         json TEXT NOT NULL,
         object_ids_json TEXT NOT NULL
       ) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS held_outbox (
+        event_id TEXT PRIMARY KEY,
+        json TEXT NOT NULL,
+        object_ids_json TEXT NOT NULL,
+        reason TEXT NOT NULL
+      ) WITHOUT ROWID;
     `);
   }
 
@@ -316,6 +322,57 @@ export class LocalState implements Disposable {
 
   public acknowledgeOutbox(eventId: string): void {
     this.database.prepare("DELETE FROM outbox WHERE event_id=?").run(eventId);
+  }
+
+  /** Preserve obsolete-context events atomically without making them replayable. */
+  public holdOutbox(eventId: string, reason: string): void {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const moved = this.database
+        .prepare(
+          "INSERT INTO held_outbox(event_id,json,object_ids_json,reason) SELECT event_id,json,object_ids_json,? FROM outbox WHERE event_id=?",
+        )
+        .run(reason, eventId);
+      if (Number(moved.changes) !== 1)
+        throw new Error("Pending event is missing during context hold");
+      this.acknowledgeOutbox(eventId);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  public heldOutbox(): readonly {
+    readonly eventId: string;
+    readonly value: unknown;
+    readonly reason: string;
+  }[] {
+    return this.database
+      .prepare("SELECT event_id,json,reason FROM held_outbox ORDER BY event_id")
+      .all()
+      .map((row) => {
+        const value = row as Record<string, unknown>;
+        return {
+          eventId: String(value.event_id),
+          value: JSON.parse(String(value.json)) as unknown,
+          reason: String(value.reason),
+        };
+      });
+  }
+
+  public heldOutboxCount(): number {
+    const row = this.database
+      .prepare("SELECT COUNT(*) AS count FROM held_outbox")
+      .get() as { readonly count: number };
+    return row.count;
+  }
+
+  public heldEvent(eventId: string): unknown | null {
+    const row = this.database
+      .prepare("SELECT json FROM held_outbox WHERE event_id=?")
+      .get(eventId) as { readonly json: string } | undefined;
+    return row === undefined ? null : (JSON.parse(row.json) as unknown);
   }
 
   public conflicts(): readonly ConflictRecord[] {

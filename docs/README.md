@@ -73,6 +73,7 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 | `src/v3/visibility.ts`             | Hashed AI path-state observation for controller-owned timing         |
 | `src/v3/watcher.ts`                | Included-directory native watching and full-scan wakeups             |
 | `src/v3/restore.ts`                | Witnessed encrypted snapshot restoration into protected masters      |
+| `src/v3/git-context.ts`            | Committed-tree baselines for independent default-branch advances     |
 | `test/product.integration.test.ts` | Focused V3 end-to-end proof                                          |
 
 ## Vocabulary

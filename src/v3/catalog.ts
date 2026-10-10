@@ -34,6 +34,7 @@ export interface ScanResult {
   readonly reusedFiles: number;
   readonly capturedFiles: number;
   readonly scope: RepositoryScope | null;
+  readonly observedRepositories: readonly RepositoryContext[];
 }
 
 export interface RepositoryScope {
@@ -92,6 +93,7 @@ export function scanNamespace(
     byIdentity.set(key, values);
   }
   const claimed = new Set<string>();
+  const replacements = new Map<string, CatalogEntry>();
   const entries: CatalogEntry[] = [];
   const nodeByPath = new Map<string, string>();
   const gitBoundaries: GitBoundary[] = [];
@@ -242,6 +244,8 @@ export function scanNamespace(
         for (const id of captured?.objectIds ?? []) objectIds.add(id);
       }
       const nodeId = inherited?.nodeId ?? randomUUID();
+      if (inherited === undefined && exact !== undefined)
+        replacements.set(nodeId, exact);
       const parentNodeId = relativeDirectory
         ? nodeByPath.get(relativeDirectory)
         : "$root";
@@ -268,6 +272,30 @@ export function scanNamespace(
     }
   };
   walk(root, "");
+  // Atomic saves and Git restores replace inodes. Prefer a real inode move,
+  // then retain the path's identity only if that old node was not found elsewhere.
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry === undefined) continue;
+    const replacement = replacements.get(entry.nodeId);
+    if (replacement === undefined || claimed.has(replacement.nodeId)) continue;
+    entries[index] = { ...entry, nodeId: replacement.nodeId };
+    claimed.add(replacement.nodeId);
+  }
+  const finalNodes = new Map(
+    entries.map((entry) => [entry.path, entry.nodeId]),
+  );
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (entry !== undefined)
+      entries[index] = {
+        ...entry,
+        parentNodeId:
+          entry.parentPath === null
+            ? "$root"
+            : (finalNodes.get(entry.parentPath) ?? "$missing"),
+      };
+  }
   const includedLeaves = entries.filter((entry) => entry.kind !== "directory");
   const includedParents = new Set<string>();
   for (const entry of includedLeaves) {
@@ -328,6 +356,7 @@ export function scanNamespace(
     reusedFiles,
     capturedFiles,
     scope,
+    observedRepositories: [...contexts.values()],
   };
 }
 

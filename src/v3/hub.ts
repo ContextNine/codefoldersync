@@ -213,6 +213,24 @@ export class HubStore implements Disposable {
     }
     const checkpoint = this.checkpoint(input.snapshot.folderId);
     validateNamespacePolicy(input.snapshot, checkpoint.config);
+    if (
+      checkpoint.config.syncPolicy.mode === "default-branch" &&
+      checkpoint.snapshot !== null
+    ) {
+      for (const previous of checkpoint.snapshot.repositories) {
+        const next = input.snapshot.repositories.find(
+          (value) => value.path === previous.path,
+        );
+        if (
+          next === undefined ||
+          next.identity !== previous.identity ||
+          next.branch !== previous.branch
+        )
+          throw new Error(
+            "Repository context removal or replacement requires a fresh adoption",
+          );
+      }
+    }
     if (input.baseSequence !== checkpoint.sequence)
       throw new Error("Snapshot compare-and-swap failed");
     const peer = checkpoint.config.peers.find(

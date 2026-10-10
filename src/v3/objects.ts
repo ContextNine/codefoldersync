@@ -385,6 +385,20 @@ function fsyncDirectory(path: string): void {
 function forEachChunk(path: string, consume: (bytes: Buffer) => void): void {
   const descriptor = openSync(path, "r");
   const input = Buffer.allocUnsafe(readBufferBytes);
+  const writer = chunkWriter(consume);
+  try {
+    for (;;) {
+      const count = readSync(descriptor, input, 0, input.length, null);
+      if (count === 0) break;
+      writer.write(input.subarray(0, count));
+    }
+    writer.finish();
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function chunkWriter(consume: (bytes: Buffer) => void) {
   const chunk = Buffer.allocUnsafe(maximumChunk);
   let chunkBytes = 0;
   let rolling = 0;
@@ -394,11 +408,9 @@ function forEachChunk(path: string, consume: (bytes: Buffer) => void): void {
     chunkBytes = 0;
     rolling = 0;
   };
-  try {
-    for (;;) {
-      const count = readSync(descriptor, input, 0, input.length, null);
-      if (count === 0) break;
-      for (let index = 0; index < count; index += 1) {
+  return {
+    write(input: Buffer): void {
+      for (let index = 0; index < input.length; index += 1) {
         const byte = input[index];
         if (byte === undefined) throw new Error("Chunk read failed");
         chunk[chunkBytes] = byte;
@@ -410,11 +422,48 @@ function forEachChunk(path: string, consume: (bytes: Buffer) => void): void {
         )
           flush();
       }
-    }
-    flush();
-  } finally {
-    closeSync(descriptor);
-  }
+    },
+    finish: flush,
+  };
+}
+
+/** Capture a streamed committed blob with exactly the working-file chunk contract. */
+export function regularCapture(
+  expectedBytes: number,
+  executable: boolean,
+  store: ObjectStore,
+) {
+  const whole = createHash("sha256");
+  const chunks: { id: string; bytes: number }[] = [];
+  let bytes = 0;
+  const consume = (chunk: Buffer): void => {
+    whole.update(chunk);
+    chunks.push({ id: store.put(chunk), bytes: chunk.length });
+    bytes += chunk.length;
+  };
+  const writer = expectedBytes <= smallFileCutoff ? null : chunkWriter(consume);
+  const small: Buffer[] = [];
+  return {
+    write(input: Buffer): void {
+      if (expectedBytes <= smallFileCutoff) small.push(Buffer.from(input));
+      else writer?.write(input);
+    },
+    finish(): string {
+      if (expectedBytes <= smallFileCutoff) consume(Buffer.concat(small));
+      else writer?.finish();
+      if (bytes !== expectedBytes)
+        throw new Error("Committed blob length differs from its Git header");
+      const manifest: RegularManifest = {
+        schemaVersion,
+        type: "regular",
+        executable,
+        bytes,
+        digest: whole.digest("hex"),
+        chunks,
+      };
+      return store.put(Buffer.from(canonicalJson(manifest), "utf8"));
+    },
+  };
 }
 
 function createGearTable(): Uint32Array {

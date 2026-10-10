@@ -41,6 +41,7 @@ import {
   saveConfig,
   signPayload,
   verifyConfig,
+  verifyPayload,
 } from "./config.js";
 import {
   adoptionVerificationPayload,
@@ -64,6 +65,7 @@ import { contentVersion, deriveMutations } from "./mutations.js";
 import { LocalState } from "./state.js";
 import { HubTransport } from "./transport.js";
 import { acquireGitLease, recoverGitLease } from "./git-lease.js";
+import { prepareGitContexts } from "./git-context.js";
 import {
   schemaVersion,
   type AdoptionClassification,
@@ -106,6 +108,7 @@ export interface AdoptionApplyOptions {
 
 export type NormalApplyFaultPoint =
   | "after-outbox"
+  | "after-upload"
   | "after-local-publish"
   | "after-apply-journal"
   | "after-moves-staged"
@@ -472,9 +475,9 @@ export async function verifyFullV3(
         : ["Local semantic manifest differs from the accepted hub checkpoint"];
     for (const paused of scanned.scope?.paused ?? [])
       reasons.push(`Repository ${paused.path || "."}: ${paused.reason}`);
-    const conflicts = activeConflictCount(
-      await transport.conflicts(config.folderId),
-    );
+    const conflicts =
+      state.heldOutboxCount() +
+      activeConflictCount(await transport.conflicts(config.folderId));
     return {
       ...summary(
         config,
@@ -518,6 +521,7 @@ export async function syncFolderV3(
   using objects = new ObjectStore(join(config.stateDir, "objects"));
   const ignore = ensureIgnore(config.root);
   let baseline = loadBaseline(config);
+  let heldBaseline = baseline;
   if (config.syncPolicy.mode === "default-branch" && baseline === null)
     throw new Error(
       "Default-branch synchronization requires an adopted context baseline",
@@ -547,17 +551,26 @@ export async function syncFolderV3(
       applied,
       uploaded,
       downloaded,
-      conflicts,
+      conflicts + state.heldOutboxCount(),
     );
+    const retained =
+      state.heldOutboxCount() > 0
+        ? [
+            "Earlier Git-context events are retained locally and were not replayed",
+          ]
+        : [];
     return scope !== null && scope.paused.length > 0
       ? {
           ...result,
           status: "inconclusive",
-          reasons: scope.paused.map(
-            (value) => `Repository ${value.path || "."}: ${value.reason}`,
-          ),
+          reasons: [
+            ...retained,
+            ...scope.paused.map(
+              (value) => `Repository ${value.path || "."}: ${value.reason}`,
+            ),
+          ],
         }
-      : result;
+      : { ...result, reasons: retained };
   };
   const acceptLocal = (
     canonical: NamespaceManifest,
@@ -568,7 +581,7 @@ export async function syncFolderV3(
         ? canonical
         : combineScopedNamespace(
             projectNamespace(canonical, scope),
-            baseline ?? canonical,
+            heldBaseline ?? canonical,
             scope,
           );
     const catalog =
@@ -576,7 +589,7 @@ export async function syncFolderV3(
         ? local.manifest.entries
         : combineScopedNamespace(
             local.manifest,
-            { ...(baseline ?? canonical), entries: state.catalog() },
+            { ...(heldBaseline ?? canonical), entries: state.catalog() },
             scope,
           ).entries;
     state.replaceCatalog(catalog, sequence);
@@ -590,17 +603,70 @@ export async function syncFolderV3(
     assertAcceptedConfig(config, checkpoint);
     if (checkpoint.snapshot === null)
       throw new Error("Hub has no source checkpoint");
-    if (config.syncPolicy.mode === "default-branch") {
+    let workingCheckpoint = checkpoint.snapshot;
+    const prepareLocal = async (): Promise<void> => {
+      if (
+        config.syncPolicy.mode !== "default-branch" ||
+        heldBaseline === null ||
+        checkpoint.snapshot === null
+      )
+        return;
+      const prepared = await prepareGitContexts(
+        config,
+        heldBaseline,
+        checkpoint.snapshot,
+        local,
+        ignore,
+        objects,
+      );
+      baseline = prepared.baseline;
+      workingCheckpoint = prepared.accepted;
+      const catalog = new Map(
+        state.catalog().map((entry) => [entry.path, entry]),
+      );
+      for (const entry of prepared.catalog) catalog.set(entry.path, entry);
       local = scanNamespace(
         config,
         objects,
         ignore,
-        state.catalog(),
+        [...catalog.values()],
         false,
         false,
-        { accepted: checkpoint.snapshot, baseline },
+        { accepted: workingCheckpoint, baseline },
       );
       scope = local.scope;
+    };
+    await prepareLocal();
+    if (config.syncPolicy.mode === "default-branch") {
+      const branch = config.syncPolicy.branch;
+      const observed = new Map(
+        local.observedRepositories.map((value) => [value.path, value]),
+      );
+      for (const record of state.outbox()) {
+        const pending = record.value as SignedSnapshot;
+        validateNamespacePolicy(pending.snapshot, config);
+        const changed =
+          pending.snapshot.repositories.some((previous) => {
+            const current = observed.get(previous.path);
+            return (
+              current !== undefined &&
+              current.branch === branch &&
+              (current.head !== previous.head ||
+                current.identity !== previous.identity)
+            );
+          }) ||
+          local.manifest.repositories.some(
+            (current) =>
+              !pending.snapshot.repositories.some(
+                (previous) => previous.path === current.path,
+              ),
+          );
+        if (changed)
+          state.holdOutbox(
+            record.eventId,
+            "Git context advanced; exact event retained without replay",
+          );
+      }
     }
     // A mixed-context queue is retained, not replayed into a different checkout.
     // Eligible siblings can publish a fresh CAS proposal while it stays private.
@@ -609,7 +675,26 @@ export async function syncFolderV3(
         const pending = record.value as SignedSnapshot;
         assertRepositoryContexts(config, local.manifest, pending.snapshot);
       }
-      checkpoint = await resumeOutbox(state, objects, transport, checkpoint);
+      const sequence = checkpoint.sequence;
+      checkpoint = await resumeOutbox(
+        state,
+        objects,
+        transport,
+        checkpoint,
+        (pending) =>
+          assertRepositoryContexts(
+            config,
+            local.manifest,
+            pending.snapshot,
+            scope,
+          ),
+      );
+      if (sequence !== checkpoint.sequence) {
+        if (checkpoint.snapshot === null)
+          throw new Error("Resumed checkpoint is missing");
+        workingCheckpoint = checkpoint.snapshot;
+        await prepareLocal();
+      }
     }
     importPublishedConflicts(
       state,
@@ -628,6 +713,7 @@ export async function syncFolderV3(
       )
     ) {
       baseline = loadBaseline(config);
+      heldBaseline = baseline;
       local = scanNamespace(
         config,
         objects,
@@ -639,15 +725,19 @@ export async function syncFolderV3(
           ? undefined
           : { accepted: checkpoint.snapshot!, baseline, scope },
       );
+      workingCheckpoint = checkpoint.snapshot!;
+      await prepareLocal();
     }
     if (checkpoint.snapshot === null)
       throw new Error("Hub has no source checkpoint");
     let remote =
       scope === null
-        ? checkpoint.snapshot
-        : projectNamespace(checkpoint.snapshot, scope);
+        ? workingCheckpoint
+        : projectNamespace(workingCheckpoint, scope);
     assertRepositoryContexts(config, local.manifest, remote, scope);
-    if (local.manifest.digest === remote.digest) {
+    const transitionPending =
+      workingCheckpoint.digest !== checkpoint.snapshot.digest;
+    if (local.manifest.digest === remote.digest && !transitionPending) {
       acceptLocal(checkpoint.snapshot, checkpoint.sequence);
       return finish(
         checkpoint.sequence,
@@ -678,12 +768,25 @@ export async function syncFolderV3(
     }
     desired = reattachRestoredNodes(desired, remote, state);
     assertRepositoryContexts(config, local.manifest, desired, scope);
-    if (desired.digest !== remote.digest || conflicts.length > 0) {
+    if (
+      desired.digest !== remote.digest ||
+      conflicts.length > 0 ||
+      transitionPending
+    ) {
       const proposal =
         scope === null
           ? desired
           : combineScopedNamespace(desired, checkpoint.snapshot, scope);
       const required = new Set(manifestObjectIds(desired, objects));
+      if (transitionPending)
+        downloaded += await fetchSnapshotObjects(
+          scope === null
+            ? checkpoint.snapshot
+            : projectNamespace(checkpoint.snapshot, scope),
+          transport,
+          objects,
+          false,
+        );
       for (const conflict of conflicts)
         if (conflict.manifestId !== null)
           for (const id of referencedObjects(conflict.manifestId, objects))
@@ -695,8 +798,10 @@ export async function syncFolderV3(
         signedSnapshot(config, state, objects, proposal, checkpoint, conflicts),
         [...required],
         (point) => {
-          if (point === "after-outbox") options.fault?.("after-outbox");
+          if (point === "after-outbox" || point === "after-upload")
+            options.fault?.(point);
         },
+        () => assertRepositoryContexts(config, local.manifest, desired, scope),
       );
       published = true;
       uploaded = accepted.uploaded;
@@ -862,6 +967,7 @@ export async function statusV3(config: ProductConfig): Promise<{
   readonly hubSequence: number | null;
   readonly localCursor: number;
   readonly outboxEntries: number;
+  readonly heldOutboxEntries: number;
   readonly pendingJournals: number;
   readonly catalogEntries: number;
   readonly catalogHistoryEntries: number;
@@ -885,6 +991,7 @@ export async function statusV3(config: ProductConfig): Promise<{
     configRevision: config.revision,
     localCursor: state.sequence(),
     outboxEntries: state.outbox().length,
+    heldOutboxEntries: state.heldOutboxCount(),
     pendingJournals: state.journals().length,
     catalogEntries: state.catalog().length,
     catalogHistoryEntries: catalogHistory.length,
@@ -1090,6 +1197,49 @@ export function recoverConflictV3(
   materializeManifest(conflict.manifestId, target, objects);
 }
 
+/** Restore one held event file privately; never inject it into a new checkout. */
+export function recoverHeldFileV3(
+  config: ProductConfig,
+  eventId: string,
+  path: string,
+): string {
+  verifyConfig(config);
+  normalizeRelativePath(path);
+  using state = new LocalState(config);
+  const held = state.heldEvent(eventId);
+  if (typeof held !== "object" || held === null)
+    throw new Error("Held event is unavailable");
+  const event = held as SignedSnapshot;
+  validateNamespaceManifest(event.snapshot);
+  const peer = config.peers.find((value) => value.peerId === event.peerId);
+  if (
+    event.eventId !== eventId ||
+    event.snapshot.folderId !== config.folderId ||
+    peer === undefined ||
+    !verifyPayload(snapshotPayload(event), event.signature, peer.publicKey)
+  )
+    throw new Error("Held event signature or folder does not match");
+  const entry = event.snapshot.entries.find((entry) => entry.path === path);
+  if (
+    entry === undefined ||
+    entry.kind === "directory" ||
+    entry.manifestId === null
+  )
+    throw new Error("Held event has no recoverable leaf at that path");
+  const target = safeTarget(
+    config.stateDir,
+    `held-recovery/${hashText(eventId)}/${path}`,
+  );
+  if (pathExists(target))
+    throw new Error("Held recovery destination must be absent");
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+  using objects = new ObjectStore(join(config.stateDir, "objects"));
+  materializeManifest(entry.manifestId, target, objects);
+  if (entry.kind === "regular" && isPlaintextEnvPath(path))
+    chmodSync(target, 0o600);
+  return target;
+}
+
 export function promoteConflictV3(
   config: ProductConfig,
   conflictId: string,
@@ -1243,11 +1393,13 @@ async function publishDurably(
   snapshot: SignedSnapshot,
   objectIds: readonly string[],
   fault?: (point: SealFaultPoint) => void,
+  beforeAccept?: () => void,
 ): Promise<{ readonly sequence: number; readonly uploaded: number }> {
   state.queueOutbox(snapshot.eventId, snapshot, objectIds);
   fault?.("after-outbox");
   const uploaded = await transport.ensureHubObjects(objectIds, objects);
   fault?.("after-upload");
+  beforeAccept?.();
   const sequence = await transport.acceptSnapshot(snapshot);
   fault?.("after-hub-accept");
   state.acknowledgeOutbox(snapshot.eventId);
@@ -1260,6 +1412,7 @@ async function resumeOutbox(
   objects: ObjectStore,
   transport: HubTransport,
   initial: HubCheckpoint,
+  beforeAccept?: (snapshot: SignedSnapshot) => void,
 ): Promise<HubCheckpoint> {
   let checkpoint = initial;
   for (const record of state.outbox()) {
@@ -1273,6 +1426,7 @@ async function resumeOutbox(
       throw new Error(`Durable outbox entry is invalid: ${record.eventId}`);
     try {
       await transport.ensureHubObjects(record.objectIds, objects);
+      beforeAccept?.(snapshot);
       await transport.acceptSnapshot(snapshot);
       state.acknowledgeOutbox(record.eventId);
       checkpoint = await transport.checkpoint(checkpoint.config.folderId);
@@ -1296,6 +1450,7 @@ async function fetchSnapshotObjects(
   snapshot: NamespaceManifest,
   transport: HubTransport,
   objects: ObjectStore,
+  includeChunks = true,
 ): Promise<number> {
   const pending = [
     ...snapshot.entries.flatMap((entry) =>
@@ -1311,7 +1466,7 @@ async function fetchSnapshotObjects(
     visited.add(id);
     downloaded += await transport.fetchObjects([id], objects);
     const manifest = parseManifest(objects.get(id));
-    if (manifest.type === "regular") {
+    if (manifest.type === "regular" && includeChunks) {
       const chunks = manifest.chunks.map((chunk) => chunk.id);
       downloaded += await transport.fetchObjects(chunks, objects);
       for (const chunk of chunks) visited.add(chunk);
@@ -2443,8 +2598,16 @@ function mergeSnapshots(
     const localEntry = ours.get(nodeId);
     const remoteEntry = theirs.get(nodeId);
     if (before === undefined) {
-      if (remoteEntry !== undefined) resultByNode.set(nodeId, remoteEntry);
-      else if (localEntry !== undefined) resultByNode.set(nodeId, localEntry);
+      if (remoteEntry !== undefined) {
+        resultByNode.set(nodeId, remoteEntry);
+        if (localEntry !== undefined && !entryEqual(localEntry, remoteEntry))
+          preserveLocal(
+            localEntry,
+            remoteEntry.path,
+            "concurrent creation in the current Git context",
+            remoteEntry,
+          );
+      } else if (localEntry !== undefined) resultByNode.set(nodeId, localEntry);
       continue;
     }
     if (localEntry === undefined && remoteEntry === undefined) continue;

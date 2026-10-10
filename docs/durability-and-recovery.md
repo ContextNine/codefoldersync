@@ -29,6 +29,8 @@ The hub verifies the peer signature over the snapshot, explicit mutations, peer 
 
 Default-branch queues also retain their repository context. When any scope is suspended, the engine keeps mixed-context queued records private and publishes eligible sibling changes as fresh CAS events. It does not retry the old mixed snapshot in a different checkout. Returning to the matching context permits normal idempotent retry or stale-CAS reconciliation. There is no automatic immutable-object cleanup.
 
+A changed HEAD moves the exact queued event and its object closure from `outbox` to `held_outbox` in one SQLite transaction. The engine never replays a held event. `recover-held <event-id> --path <relative-leaf>` verifies the enrolled signature and immutable manifest, then materializes one retained version under owner-only private state. It does not alter the current checkout. Publication rechecks active and enclosing Git contexts after object upload and before accepting the signed event.
+
 ## Adoption recovery
 
 Before adoption replaces or removes a target path, the live object or subtree is renamed to:
