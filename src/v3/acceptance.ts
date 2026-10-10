@@ -32,6 +32,11 @@ import { LocalState } from "./state.js";
 import type { ProductConfig, SyncPolicy } from "./types.js";
 import { defaultSyncPolicy, policyIncludes } from "./policy.js";
 import {
+  cloneAcceptanceObjectTemplate,
+  validateBoundedReflinkStorage,
+  type BoundedReflinkStorage,
+} from "./acceptance-reflink.js";
+import {
   checkStorageBudget,
   cleanupRunRoot,
   inspectPhysicalTree,
@@ -70,6 +75,7 @@ export interface PseudoFleetAcceptanceSpec {
   readonly targetOrder: readonly string[];
   readonly hubMachineId: string;
   readonly masters: readonly PseudoFleetMasterSpec[];
+  readonly storage?: BoundedReflinkStorage;
 }
 
 export interface PseudoFleetRunResult {
@@ -86,6 +92,12 @@ export interface PseudoFleetRunResult {
   };
   readonly conflicts: number;
   readonly passed: true;
+  readonly storage?: {
+    readonly kind: "bounded-reflink";
+    readonly objectsPreseeded: true;
+    readonly maximumTotalBytes: number;
+    readonly imageAllocatedBytes: number;
+  };
 }
 
 export interface PseudoFleetCapacityEstimate {
@@ -199,26 +211,40 @@ export async function runPseudoFleetAcceptanceV3(
     runRoot: spec.runRoot,
   });
   try {
-    const capacity = estimatePseudoFleetCapacityV3(spec);
-    if (!capacity.passed)
-      throw new Error(
-        `Pseudo-fleet lacks its two-run copy, object, recovery, and 25 percent reserve: required ${capacity.requiredBytes}, available ${capacity.availableBytes}`,
-      );
-    const runInventory = inspectPhysicalTree(spec.runRoot);
-    checkStorageBudget({
-      profile: "wootbook-acceptance",
-      inventory: runInventory,
-      baselineAllocatedBytes: runInventory.allocatedBytes,
-      projectedAdditionalBytes: capacity.requiredBytes,
-    });
+    if (spec.storage !== undefined)
+      validateBoundedReflinkStorage(spec.storage, [
+        spec.runRoot,
+        ...spec.masters.map((master) => master.root),
+      ]);
+    else {
+      const capacity = estimatePseudoFleetCapacityV3(spec);
+      if (!capacity.passed)
+        throw new Error(
+          `Pseudo-fleet lacks its two-run copy, object, recovery, and 25 percent reserve: required ${capacity.requiredBytes}, available ${capacity.availableBytes}`,
+        );
+      const runInventory = inspectPhysicalTree(spec.runRoot);
+      checkStorageBudget({
+        profile: "wootbook-acceptance",
+        inventory: runInventory,
+        baselineAllocatedBytes: runInventory.allocatedBytes,
+        projectedAdditionalBytes: capacity.requiredBytes,
+      });
+    }
     for (const master of spec.masters) {
       const witness = await createTreeWitness(master.root);
       if (canonicalJson(witness) !== canonicalJson(master.witness))
         throw new Error(`Master witness mismatch: ${master.machineId}`);
     }
     const results: PseudoFleetRunResult[] = [];
-    for (let repetition = 1; repetition <= spec.repetitions; repetition += 1)
+    for (let repetition = 1; repetition <= spec.repetitions; repetition += 1) {
       results.push(await runPseudoFleetRepetition(spec, repetition));
+      if (spec.storage !== undefined)
+        cleanupRunRoot({
+          schemaVersion: 1,
+          runId: `${spec.runId}-${repetition}`,
+          runRoot: repetitionRoot(spec, repetition),
+        });
+    }
     for (const master of spec.masters) {
       const witness = await createTreeWitness(master.root);
       if (canonicalJson(witness) !== canonicalJson(master.witness))
@@ -303,7 +329,7 @@ async function runPseudoFleetRepetition(
   mkdirSync(repetitionRoot, { recursive: false, mode: 0o700 });
   writeFileSync(
     join(repetitionRoot, "SENTINEL"),
-    `${spec.runId}:${repetition}\n`,
+    `${spec.runId}-${repetition}\n`,
     {
       encoding: "utf8",
       mode: 0o600,
@@ -313,9 +339,26 @@ async function runPseudoFleetRepetition(
   const roots: Record<string, string> = {};
   for (const master of spec.masters) {
     const peerRoot = join(repetitionRoot, "peers", master.machineId, "Code");
-    copyTree(master.root, peerRoot);
+    copyTree(master.root, peerRoot, spec.storage !== undefined);
     roots[master.machineId] = peerRoot;
+    if (spec.storage !== undefined)
+      cloneAcceptanceObjectTemplate(
+        spec.storage.objectTemplate,
+        join(
+          repetitionRoot,
+          "peers",
+          master.machineId,
+          "state",
+          "objects",
+          "objects.sqlite",
+        ),
+      );
   }
+  if (spec.storage !== undefined)
+    cloneAcceptanceObjectTemplate(
+      spec.storage.objectTemplate,
+      join(repetitionRoot, "hub", "objects", "objects.sqlite"),
+    );
   const authorityRoot = requiredRoot(roots, spec.sourceMachineId);
   const machine = (machineId: string): DistributedFleetSpec["authority"] => ({
     machineId,
@@ -405,6 +448,10 @@ async function runPseudoFleetRepetition(
     targetDigests[target.machineId] = targetDigest;
     conflicts += verification.conflicts;
   }
+  const storage =
+    spec.storage === undefined
+      ? undefined
+      : validateBoundedReflinkStorage(spec.storage, [repetitionRoot]);
   const result: PseudoFleetRunResult = {
     repetition,
     sourceDigest,
@@ -416,6 +463,16 @@ async function runPseudoFleetRepetition(
     },
     conflicts,
     passed: true,
+    ...(storage === undefined
+      ? {}
+      : {
+          storage: {
+            kind: "bounded-reflink" as const,
+            objectsPreseeded: true as const,
+            maximumTotalBytes: storage.maximumTotalBytes,
+            imageAllocatedBytes: storage.imageAllocatedBytes,
+          },
+        }),
   };
   writeResult(repetitionRoot, result);
   return result;
@@ -459,13 +516,32 @@ function writeDeterministicWorkload(
   };
 }
 
-function copyTree(source: string, destination: string): void {
+function repetitionRoot(
+  spec: PseudoFleetAcceptanceSpec,
+  repetition: number,
+): string {
+  return join(
+    resolve(spec.runRoot),
+    `${spec.scenarioId}-${String(repetition).padStart(2, "0")}`,
+  );
+}
+
+function copyTree(
+  source: string,
+  destination: string,
+  mandatoryReflink: boolean,
+): void {
   if (existsSync(destination))
     throw new Error("Acceptance copy destination exists");
   mkdirSync(destination, { recursive: true, mode: 0o700 });
   const result = spawnSync(
     "cp",
-    ["-a", "--reflink=auto", `${resolve(source)}/.`, destination],
+    [
+      "-a",
+      mandatoryReflink ? "--reflink=always" : "--reflink=auto",
+      `${resolve(source)}/.`,
+      destination,
+    ],
     {
       encoding: "utf8",
     },
@@ -648,6 +724,10 @@ function validatePseudoFleetSpec(spec: PseudoFleetAcceptanceSpec): void {
   ] as const)
     if (value.trim().length === 0)
       throw new Error(`Pseudo-fleet ${name} is empty`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{4,127}$/u.test(spec.scenarioId))
+    throw new Error(
+      "Pseudo-fleet scenario must be a run-qualified path component",
+    );
   if (!isAbsolute(spec.runRoot) || !isAbsolute(spec.evidenceDirectory))
     throw new Error("Pseudo-fleet run and evidence roots must be absolute");
   const runRoot = resolve(spec.runRoot);
@@ -665,7 +745,11 @@ function validatePseudoFleetSpec(spec: PseudoFleetAcceptanceSpec): void {
   if (spec.command.length === 0)
     throw new Error("Pseudo-fleet CodeFolderSync command is missing");
   const ids = spec.masters.map((master) => master.machineId);
-  if (new Set(ids).size !== ids.length || ids.length < 3)
+  if (
+    new Set(ids).size !== ids.length ||
+    ids.length < 3 ||
+    ids.some((id) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(id))
+  )
     throw new Error("Pseudo-fleet requires distinct source and target masters");
   if (!ids.includes(spec.sourceMachineId))
     throw new Error("Pseudo-fleet source master is missing");
@@ -673,6 +757,7 @@ function validatePseudoFleetSpec(spec: PseudoFleetAcceptanceSpec): void {
     throw new Error("Pseudo-fleet hub master is missing");
   if (
     spec.targetOrder.length !== ids.length - 1 ||
+    new Set(spec.targetOrder).size !== spec.targetOrder.length ||
     spec.targetOrder.includes(spec.sourceMachineId) ||
     spec.targetOrder.some((machineId) => !ids.includes(machineId))
   )

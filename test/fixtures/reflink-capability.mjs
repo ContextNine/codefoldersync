@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ObjectStore } from "../../dist/v3/objects.js";
+import { createTreeWitness } from "../../dist/v3/acceptance.js";
+import { seedAcceptanceObjectTemplate } from "../../dist/v3/acceptance-reflink.js";
 
 const [inheritedNamespace, uidText, gidText] = process.argv.slice(2);
 assert.equal(process.getuid(), 0);
@@ -58,8 +60,11 @@ chownSync(root, uid, gid);
 const sentinel = "private-reflink-capability-v1\n";
 const mountpoint = join(root, "filesystem");
 let mounted = false;
+const residue = mkdtempSync(join(tmpdir(), "codefoldersync-reflink-residue-"));
+chownSync(residue, uid, gid);
 try {
   writeFileSync(join(root, "SENTINEL"), sentinel, { mode: 0o600 });
+  chownSync(join(root, "SENTINEL"), uid, gid);
   const image = join(root, "fresh-filesystem.img");
   const fd = openSync(image, "wx", 0o600);
   ftruncateSync(fd, 256 * 1024 ** 2);
@@ -77,6 +82,8 @@ try {
     mountpoint,
   ]);
   mounted = true;
+  chownSync(mountpoint, uid, gid);
+  chmodSync(mountpoint, 0o700);
   const master = join(mountpoint, "master");
   const sourceFile = join(master, "Code/folder/payload.bin");
   mkdirSync(dirname(sourceFile), { recursive: true });
@@ -204,6 +211,118 @@ renameSync(peer + '/Code/folder', peer + '/Code/renamed');`;
     "private-file-change",
   );
   assert.equal(readFileSync(materialized, "utf8"), "private-deduped-change");
+
+  // Exercise the actual bounded runner, not only the underlying filesystem.
+  const masters = [];
+  for (const machineId of ["mattbook", "wootbook", "workermacair"]) {
+    const code = join(mountpoint, "masters", machineId, "Code");
+    mkdirSync(dirname(code), { recursive: true });
+    command("cp", ["-a", "--reflink=always", join(master, "Code"), code]);
+    ownTree(join(mountpoint, "masters", machineId));
+    masters.push({
+      machineId,
+      root: code,
+      witness: await createTreeWitness(code),
+    });
+  }
+  const templateDirectory = join(mountpoint, "object-template");
+  const seeded = seedAcceptanceObjectTemplate(
+    masters.map((item) => item.root),
+    templateDirectory,
+  );
+  assert.equal(seeded.capturedLeaves, 3);
+  assert.ok(seeded.objects > 1);
+  ownTree(templateDirectory);
+  const releaseSha256 = "d".repeat(64);
+  const repository = fileURLToPath(new URL("../../", import.meta.url));
+  const installation = join(mountpoint, "test-install");
+  command(process.execPath, [
+    join(repository, "dist/product-cli.js"),
+    "install",
+    "--built",
+    join(repository, "dist"),
+    "--install-root",
+    join(installation, "lib"),
+    "--bin-dir",
+    join(installation, "bin"),
+    "--release-sha256",
+    releaseSha256,
+  ]);
+  ownTree(installation);
+  const runId = "reflink-runner-probe";
+  const runRoot = join(mountpoint, "run-full-fixture");
+  mkdirSync(runRoot, { mode: 0o700 });
+  writeFileSync(join(runRoot, "SENTINEL"), `${runId}\n`, { mode: 0o600 });
+  ownTree(runRoot);
+  const spec = {
+    schemaVersion: 1,
+    runId,
+    scenarioId: "reflink-fixture",
+    seed: "public-fixture-only",
+    repetitions: 2,
+    runRoot,
+    evidenceDirectory: join(mountpoint, "runner-evidence"),
+    expectedVersion: "0.3.0",
+    expectedReleaseSha256: releaseSha256,
+    command: [join(installation, "bin/codefoldersync")],
+    backupWitness: "public-fixture-only-not-archived-acceptance",
+    sourceMachineId: "mattbook",
+    targetOrder: ["wootbook", "workermacair"],
+    hubMachineId: "wootbook",
+    masters,
+    storage: {
+      kind: "bounded-reflink",
+      volumeRunId: "private-reflink-capability-v1",
+      volumeRunRoot: root,
+      imagePath: image,
+      mountRoot: mountpoint,
+      maximumImageBytes: 256 * 1024 ** 2,
+      inheritedMountNamespace: inheritedNamespace,
+      retainedRoots: [residue],
+      objectTemplate: join(templateDirectory, "objects.sqlite"),
+    },
+  };
+  const acceptanceModule = pathToFileURL(
+    join(repository, "dist/v3/acceptance.js"),
+  ).href;
+  const storageModule = pathToFileURL(
+    join(repository, "dist/v3/acceptance-reflink.js"),
+  ).href;
+  const runner = `import assert from 'node:assert/strict';
+import { runPseudoFleetAcceptanceV3 } from ${JSON.stringify(acceptanceModule)};
+import { validateBoundedReflinkStorage } from ${JSON.stringify(storageModule)};
+const spec = ${JSON.stringify(spec)};
+assert.throws(() => validateBoundedReflinkStorage({...spec.storage, maximumImageBytes: spec.storage.maximumImageBytes + 1}, [spec.runRoot]));
+assert.throws(() => validateBoundedReflinkStorage({...spec.storage, retainedRoots: [spec.storage.volumeRunRoot]}, [spec.runRoot]));
+assert.throws(() => validateBoundedReflinkStorage(spec.storage, [spec.storage.retainedRoots[0]]));
+const results = await runPseudoFleetAcceptanceV3(spec);
+console.log(JSON.stringify(results));`;
+  const results = JSON.parse(
+    command("setpriv", [
+      `--reuid=${uid}`,
+      `--regid=${gid}`,
+      "--clear-groups",
+      process.execPath,
+      "--input-type=module",
+      "-e",
+      runner,
+    ]),
+  );
+  assert.equal(results.length, 2);
+  assert.ok(
+    results.every((result) => result.passed && result.storage.objectsPreseeded),
+  );
+  assert.equal(
+    results[0].workload.cassetteDigest,
+    results[1].workload.cassetteDigest,
+  );
+  for (const result of results)
+    assert.ok(
+      Object.values(result.targetDigests).every(
+        (digest) => digest === result.sourceDigest,
+      ),
+    );
+  assert.throws(() => lstatSync(runRoot), { code: "ENOENT" });
   command("sync", ["-f", mountpoint]);
   command("fstrim", [mountpoint]);
   const imageAllocatedBytes = lstatSync(image).blocks * 512;
@@ -226,6 +345,10 @@ renameSync(peer + '/Code/folder', peer + '/Code/renamed');`;
       materializedBefore,
       materializedAfter,
       imageAllocatedBytes,
+      boundedRunnerRepetitions: results.length,
+      boundedRunnerConverged: true,
+      boundedRunnerCleanup: true,
+      objectsPreseeded: true,
       acceptanceCorpus: false,
     }) + "\n",
   );
@@ -234,4 +357,5 @@ renameSync(peer + '/Code/folder', peer + '/Code/renamed');`;
   assert.equal(readFileSync(join(root, "SENTINEL"), "utf8"), sentinel);
   assert.ok(lstatSync(root).isDirectory() && !lstatSync(root).isSymbolicLink());
   rmSync(root, { recursive: true });
+  rmSync(residue, { recursive: true });
 }

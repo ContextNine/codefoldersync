@@ -1055,6 +1055,11 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
     );
     assert.equal(existsSync(shortRunRoot), true);
     assert.equal(existsSync(shortEvidence), false);
+    await assert.rejects(
+      runPseudoFleetAcceptanceV3({ ...spec, scenarioId: "../outside" }),
+      /path component/u,
+    );
+    assert.equal(existsSync(runRoot), true);
     const capacity = estimatePseudoFleetCapacityV3(spec);
     assert.equal(capacity.passed, true);
     assert.equal(capacity.objectStoreCopiesPerRepetition, 4);
