@@ -33,6 +33,8 @@ import {
 } from "../src/v3/engine.js";
 import { plaintextEnvPolicy } from "../src/v3/policy.js";
 import { LocalState } from "../src/v3/state.js";
+import { recoverGitLease } from "../src/v3/git-lease.js";
+import type { NormalApplyFaultPoint } from "../src/v3/engine.js";
 import type { ProductConfig, SyncPolicy } from "../src/v3/types.js";
 
 function git(root: string, ...args: string[]): string {
@@ -61,7 +63,10 @@ function synced(result: Awaited<ReturnType<typeof syncFolderV3>>): void {
   );
 }
 
-function crashApplying(config: ProductConfig): void {
+function crashApplying(
+  config: ProductConfig,
+  point: NormalApplyFaultPoint = "after-apply-journal",
+): void {
   const child = spawnSync(
     process.execPath,
     [
@@ -73,7 +78,7 @@ function crashApplying(config: ProductConfig): void {
     import { loadConfig } from './src/v3/config.ts';
     import { syncFolderV3 } from './src/v3/engine.ts';
     await syncFolderV3(loadConfig(process.argv[1]), { fault(point) {
-      if (point === 'after-apply-journal') process.kill(process.pid, 'SIGKILL');
+      if (point === ${JSON.stringify(point)}) process.kill(process.pid, 'SIGKILL');
     }});
   `,
       join(config.root, ".codefoldersync", "config.json"),
@@ -418,6 +423,181 @@ test("default-branch peers transfer edits only within a matching Git context", a
       const pausedRoot = join(target.root, "packages", "paused");
       const healthyPath = "packages/healthy/source.ts";
       const innerPath = "packages/paused/inner/source.ts";
+      const retainedPath = "packages/paused/obsolete.ts";
+      writeFileSync(
+        join(source.root, retainedPath),
+        "export const retainedBeforeApply = true;\n",
+      );
+      synced(await syncFolderV3(source));
+      synced(await syncFolderV3(target));
+      rmSync(join(source.root, retainedPath));
+      writeFileSync(
+        join(source.root, "packages/paused/source.ts"),
+        "export const interruptedPaused = true;\n",
+      );
+      writeFileSync(
+        join(source.root, healthyPath),
+        "export const interruptedHealthy = true;\n",
+      );
+      synced(await syncFolderV3(source));
+      crashApplying(target, "after-obsolete-recovery");
+      // Remove only the dead fixture owner's nonce-qualified locks, then checkout.
+      recoverGitLease(target);
+      let retainedMove = "";
+      {
+        using state = new LocalState(target);
+        const pending = state
+          .journals()
+          .find((record) => record.kind === "snapshot-apply");
+        assert.ok(pending);
+        assert.ok(
+          typeof pending.value === "object" &&
+            pending.value !== null &&
+            "recoveryRoot" in pending.value,
+        );
+        assert.equal(typeof pending.value.recoveryRoot, "string");
+        retainedMove = join(
+          String(pending.value.recoveryRoot),
+          "packages/paused/.gitignore",
+        );
+        mkdirSync(join(String(pending.value.recoveryRoot), "packages/paused"), {
+          recursive: true,
+        });
+        // Persist the exact state of an interrupted child rename.
+        state.putJournal("fixture-interrupted-child", "apply-recovery", {
+          source: join(pausedRoot, ".gitignore"),
+          destination: retainedMove,
+          applyId: pending.id,
+          paths: ["packages/paused/.gitignore"],
+        });
+        renameSync(join(pausedRoot, ".gitignore"), retainedMove);
+      }
+      git(pausedRoot, "switch", "-c", "interrupted-feature");
+      git(pausedRoot, "rm", ".gitignore");
+      writeFileSync(
+        join(pausedRoot, "source.ts"),
+        "export const privateInterrupted = true;\n",
+      );
+      git(pausedRoot, "add", "source.ts");
+      const interruptedIndex = readFileSync(join(pausedRoot, ".git", "index"));
+      const resumedSibling = await syncFolderV3(target);
+      assert.equal(
+        resumedSibling.status,
+        "inconclusive",
+        JSON.stringify(resumedSibling),
+      );
+      assert.equal(
+        resumedSibling.applied,
+        true,
+        JSON.stringify(resumedSibling),
+      );
+      assert.equal(
+        readFileSync(join(target.root, healthyPath), "utf8"),
+        "export const interruptedHealthy = true;\n",
+      );
+      assert.equal(
+        readFileSync(join(pausedRoot, "source.ts"), "utf8"),
+        "export const privateInterrupted = true;\n",
+      );
+      assert.deepEqual(
+        readFileSync(join(pausedRoot, ".git", "index")),
+        interruptedIndex,
+      );
+      assert.ok(
+        git(pausedRoot, "diff", "--cached", "--name-status").includes(
+          "D\t.gitignore",
+        ),
+      );
+      assert.equal(readFileSync(retainedMove, "utf8"), "inner/\n");
+      {
+        using state = new LocalState(target);
+        assert.equal(state.heldApplyCount(), 1);
+        assert.equal(
+          state.journals().filter((record) => record.kind === "held-move")
+            .length,
+          1,
+        );
+        const heldApply = state
+          .journals()
+          .find((record) => record.kind === "held-snapshot-apply");
+        assert.ok(heldApply);
+        const recovered = recoverHeldFileV3(
+          target,
+          heldApply.id,
+          retainedPath,
+          true,
+        );
+        assert.equal(
+          readFileSync(recovered, "utf8"),
+          "export const retainedBeforeApply = true;\n",
+        );
+        const accepted = recoverHeldFileV3(
+          target,
+          heldApply.id,
+          "packages/paused/source.ts",
+        );
+        assert.equal(
+          readFileSync(accepted, "utf8"),
+          "export const interruptedPaused = true;\n",
+        );
+      }
+      git(pausedRoot, "restore", "--staged", "source.ts", ".gitignore");
+      git(pausedRoot, "restore", "source.ts", ".gitignore");
+      git(pausedRoot, "switch", "master");
+      synced(await syncFolderV3(target));
+      assert.equal(
+        readFileSync(join(pausedRoot, "source.ts"), "utf8"),
+        "export const interruptedPaused = true;\n",
+      );
+
+      // An unavailable context waits without becoming permanently retained.
+      writeFileSync(
+        join(source.root, "packages/paused/source.ts"),
+        "export const afterLock = true;\n",
+      );
+      writeFileSync(
+        join(source.root, healthyPath),
+        "export const healthyDuringLock = true;\n",
+      );
+      synced(await syncFolderV3(source));
+      const pendingLock = await syncFolderV3(target, {
+        fault(point) {
+          if (point === "after-obsolete-recovery")
+            throw new Error("Synthetic interruption before Git lock");
+        },
+      });
+      assert.equal(pendingLock.status, "inconclusive");
+      const lockPath = join(pausedRoot, ".git", "index.lock");
+      writeFileSync(lockPath, "fixture-owned-lock\n");
+      const lockedSibling = await syncFolderV3(target);
+      assert.equal(lockedSibling.applied, true, JSON.stringify(lockedSibling));
+      assert.equal(
+        readFileSync(join(target.root, healthyPath), "utf8"),
+        "export const healthyDuringLock = true;\n",
+      );
+      assert.equal(
+        readFileSync(join(pausedRoot, "source.ts"), "utf8"),
+        "export const interruptedPaused = true;\n",
+      );
+      {
+        using state = new LocalState(target);
+        assert.equal(state.heldApplyCount(), 1);
+        assert.equal(
+          state.journals().filter((record) => record.kind === "snapshot-apply")
+            .length,
+          1,
+        );
+      }
+      rmSync(lockPath);
+      synced(await syncFolderV3(target));
+      assert.equal(
+        readFileSync(join(pausedRoot, "source.ts"), "utf8"),
+        "export const afterLock = true;\n",
+      );
+      // Start the next checkout scenario from the common committed tree.
+      git(join(source.root, "packages/paused"), "restore", "source.ts");
+      synced(await syncFolderV3(source));
+      synced(await syncFolderV3(target));
       git(pausedRoot, "switch", "-c", "private-feature");
       writeFileSync(
         join(pausedRoot, "source.ts"),

@@ -111,7 +111,7 @@ interface PreparedMachine {
 interface SemanticResult {
   readonly digest: string;
   readonly entries: number;
-  readonly gitBoundaries: number;
+  readonly repositoryContexts: number;
 }
 
 interface HubVisibilityEvent {
@@ -999,7 +999,7 @@ function semanticResult(
   return {
     digest: scanned.manifest.digest,
     entries: scanned.manifest.entries.length,
-    gitBoundaries: scanned.manifest.gitBoundaries.length,
+    repositoryContexts: scanned.manifest.repositories.length,
   };
 }
 

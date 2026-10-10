@@ -130,22 +130,11 @@ export interface CatalogEntry {
   readonly ctimeMs: number;
 }
 
-export type GitBoundaryKind = "physical" | "indirection" | "submodule";
-
-export interface GitBoundary {
-  readonly boundaryId: string;
-  readonly worktreePath: string;
-  readonly gitPath: string;
-  readonly kind: GitBoundaryKind;
-  readonly manifestId: string;
-}
-
 export interface NamespaceManifest {
   readonly schemaVersion: typeof schemaVersion;
   readonly folderId: string;
   readonly ignoreDigest: string;
   readonly entries: readonly CatalogEntry[];
-  readonly gitBoundaries: readonly GitBoundary[];
   readonly repositories: readonly RepositoryContext[];
   readonly createdAt: string;
   readonly digest: string;
@@ -192,13 +181,6 @@ export interface RestoreEntryMutation extends MutationBase {
   readonly contentVersion: string;
 }
 
-export interface GitStateMutation extends MutationBase {
-  readonly kind: "git-state";
-  readonly path: string;
-  readonly entryVersion: string | null;
-  readonly contentVersion: string | null;
-}
-
 export interface RepositoryContextMutation extends MutationBase {
   readonly kind: "repository-context";
   readonly path: string;
@@ -211,8 +193,7 @@ export type NamespaceMutation =
   | MoveEntryMutation
   | DeleteEntryMutation
   | RestoreEntryMutation
-  | RepositoryContextMutation
-  | GitStateMutation;
+  | RepositoryContextMutation;
 
 export interface SignedSnapshot {
   readonly snapshot: NamespaceManifest;
@@ -265,7 +246,7 @@ export interface AdoptionPlan {
 
 export interface ConflictRecord {
   readonly conflictId: string;
-  readonly kind: "normal" | "adoption" | "git";
+  readonly kind: "normal" | "adoption";
   readonly peerId: string;
   readonly originalPath: string;
   readonly recoveryPath: string;

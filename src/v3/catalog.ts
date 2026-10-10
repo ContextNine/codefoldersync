@@ -1,15 +1,9 @@
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { assertHash, hashJson, hashText } from "../v2/hash.js";
+import { dirname, join, resolve } from "node:path";
+import { assertHash, hashJson } from "../v2/hash.js";
 import type { CompiledIgnore } from "./ignore.js";
-import {
-  captureGitTree,
-  capturePath,
-  referencedObjects,
-  type ObjectStore,
-} from "./objects.js";
+import { capturePath, referencedObjects, type ObjectStore } from "./objects.js";
 import { normalizeRelativePath, portableName } from "./paths.js";
 import {
   inspectRepositoryContext,
@@ -22,7 +16,6 @@ import {
 import {
   schemaVersion,
   type CatalogEntry,
-  type GitBoundary,
   type NamespaceManifest,
   type ProductConfig,
   type RepositoryContext,
@@ -96,7 +89,6 @@ export function scanNamespace(
   const replacements = new Map<string, CatalogEntry>();
   const entries: CatalogEntry[] = [];
   const nodeByPath = new Map<string, string>();
-  const gitBoundaries: GitBoundary[] = [];
   const repositories: RepositoryContext[] = [];
   const objectIds = new Set<string>();
   let reusedFiles = 0;
@@ -319,9 +311,6 @@ export function scanNamespace(
   includedEntries.sort((left, right) =>
     left.path.localeCompare(right.path, "en"),
   );
-  gitBoundaries.sort((left, right) =>
-    left.worktreePath.localeCompare(right.worktreePath, "en"),
-  );
   repositories.sort((left, right) => left.path.localeCompare(right.path, "en"));
   // A checkout during capture invalidates the proposal, even if its bytes hashed.
   for (const context of repositories)
@@ -335,19 +324,13 @@ export function scanNamespace(
       inspectRepositoryContext(root, context.path),
       context,
     );
-  const digest = semanticDigest(
-    includedEntries,
-    gitBoundaries,
-    ignore.digest,
-    repositories,
-  );
+  const digest = semanticDigest(includedEntries, ignore.digest, repositories);
   return {
     manifest: {
       schemaVersion,
       folderId: config.folderId,
       ignoreDigest: ignore.digest,
       entries: includedEntries,
-      gitBoundaries,
       repositories,
       createdAt: new Date().toISOString(),
       digest,
@@ -469,7 +452,7 @@ export function projectNamespace(
     ...manifest,
     entries,
     repositories,
-    digest: semanticDigest(entries, [], manifest.ignoreDigest, repositories),
+    digest: semanticDigest(entries, manifest.ignoreDigest, repositories),
   };
 }
 
@@ -499,7 +482,7 @@ export function combineScopedNamespace(
     ...active,
     entries,
     repositories,
-    digest: semanticDigest(entries, [], active.ignoreDigest, repositories),
+    digest: semanticDigest(entries, active.ignoreDigest, repositories),
   };
   validateNamespaceManifest(result);
   return result;
@@ -534,7 +517,6 @@ function retainParents(
 
 export function semanticDigest(
   entries: readonly CatalogEntry[],
-  gitBoundaries: readonly GitBoundary[],
   ignoreDigest: string,
   repositories: readonly RepositoryContext[] = [],
 ): string {
@@ -549,19 +531,14 @@ export function semanticDigest(
       manifestId: entry.manifestId,
       executable: entry.executable,
     })),
-    gitBoundaries: gitBoundaries.map((boundary) => ({
-      boundaryId: boundary.boundaryId,
-      worktreePath: boundary.worktreePath,
-      gitPath: boundary.gitPath,
-      kind: boundary.kind,
-      manifestId: boundary.manifestId,
-    })),
   });
 }
 
 export function validateNamespaceManifest(manifest: NamespaceManifest): void {
   if (manifest.schemaVersion !== schemaVersion)
     throw new Error("Snapshot is not CodeFolderSync V3");
+  if ("gitBoundaries" in manifest)
+    throw new Error("A fresh policy-scoped snapshot is required");
   if (!Array.isArray(manifest.repositories))
     throw new Error("Snapshot has no repository context contract");
   const repositoryPaths = new Set<string>();
@@ -628,26 +605,9 @@ export function validateNamespaceManifest(manifest: NamespaceManifest): void {
     aliases.add(alias);
     entriesByPath.set(entry.path, entry);
   }
-  const boundaryIds = new Set<string>();
-  const worktrees = new Set<string>();
-  for (const boundary of manifest.gitBoundaries) {
-    assertHash(boundary.boundaryId, "Git boundary ID");
-    assertHash(boundary.manifestId, "Git boundary manifest ID");
-    if (boundary.worktreePath !== "")
-      normalizeRelativePath(boundary.worktreePath);
-    normalizeRelativePath(boundary.gitPath);
-    if (
-      boundaryIds.has(boundary.boundaryId) ||
-      worktrees.has(boundary.worktreePath)
-    )
-      throw new Error(`Duplicate Git boundary: ${boundary.worktreePath}`);
-    boundaryIds.add(boundary.boundaryId);
-    worktrees.add(boundary.worktreePath);
-  }
   if (
     semanticDigest(
       manifest.entries,
-      manifest.gitBoundaries,
       manifest.ignoreDigest,
       manifest.repositories,
     ) !== manifest.digest
@@ -678,10 +638,6 @@ export function validateNamespacePolicy(
         "Snapshot contains a path outside the signed synchronization policy",
       );
   }
-  if (manifest.gitBoundaries.length !== 0)
-    throw new Error(
-      "Git metadata is not part of either synchronization policy",
-    );
   if (
     config.syncPolicy.mode === "selected-files" &&
     manifest.repositories.length !== 0
@@ -709,64 +665,5 @@ export function manifestObjectIds(
   for (const entry of manifest.entries)
     if (entry.manifestId !== null)
       for (const id of referencedObjects(entry.manifestId, store)) ids.add(id);
-  for (const boundary of manifest.gitBoundaries)
-    for (const id of referencedObjects(boundary.manifestId, store)) ids.add(id);
   return [...ids];
-}
-
-function captureGitBoundary(
-  root: string,
-  worktreeDirectory: string,
-  gitEntry: string,
-  gitRelativePath: string,
-  store: ObjectStore,
-  objectIds: Set<string>,
-): GitBoundary {
-  const stat = lstatSync(gitEntry);
-  const worktreePath = relative(root, worktreeDirectory).replaceAll(sep, "/");
-  let physical = gitEntry;
-  let kind: GitBoundary["kind"] = "physical";
-  if (stat.isFile() && !stat.isSymbolicLink()) {
-    const content = readFileSync(gitEntry, "utf8").trim();
-    const match = /^gitdir:\s*(.+)$/u.exec(content);
-    if (match?.[1] === undefined)
-      throw new Error(`Malformed Git indirection: ${gitRelativePath}`);
-    physical = resolve(worktreeDirectory, match[1]);
-    const absoluteRoot = resolve(root);
-    if (
-      physical !== absoluteRoot &&
-      !physical.startsWith(`${absoluteRoot}${sep}`)
-    )
-      throw new Error(
-        `External Git directory is unsupported: ${gitRelativePath}`,
-      );
-    kind = physical.includes(`${sep}.git${sep}modules${sep}`)
-      ? "submodule"
-      : "indirection";
-  } else if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error(`Unsupported .git boundary: ${gitRelativePath}`);
-  }
-  if (!existsSync(physical) || !lstatSync(physical).isDirectory())
-    throw new Error(`Git directory is missing: ${gitRelativePath}`);
-  verifyGitDirectory(physical);
-  const captured = captureGitTree(physical, store);
-  for (const id of captured.objectIds) objectIds.add(id);
-  const gitPath = relative(root, physical).replaceAll(sep, "/");
-  return {
-    boundaryId: hashText(`${worktreePath}\0${gitPath}`),
-    worktreePath,
-    gitPath,
-    kind,
-    manifestId: captured.manifestId,
-  };
-}
-
-function verifyGitDirectory(path: string): void {
-  const result = spawnSync(
-    "git",
-    ["--no-optional-locks", `--git-dir=${path}`, "fsck", "--full"],
-    { encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } },
-  );
-  if (result.status !== 0)
-    throw new Error(`Git verification failed: ${result.stderr.trim()}`);
 }

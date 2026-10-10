@@ -316,7 +316,7 @@ export class HubStore implements Disposable {
     if (
       checkpoint.config.lifecycle === "adoption" &&
       (input.peerId === checkpoint.config.authority.peerId ||
-        !["adoption", "git"].includes(input.conflict.kind))
+        input.conflict.kind !== "adoption")
     )
       throw new Error("Only target-originated adoption conflicts are accepted");
     const payloadHash = hashJson(conflictPayload(input));
@@ -433,7 +433,7 @@ export class HubStore implements Disposable {
       conflictIds.add(conflict.conflictId);
       if (conflict.peerId !== input.peerId)
         throw new Error("Snapshot conflict peer does not match publisher");
-      if (!["normal", "git"].includes(conflict.kind))
+      if (conflict.kind !== "normal")
         throw new Error(
           "Snapshots can contain only normal synchronization conflicts",
         );

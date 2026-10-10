@@ -16,7 +16,6 @@ import {
   randomBytes,
   randomUUID,
 } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { assertHash, canonicalJson, hashJson, hashText } from "../v2/hash.js";
 import { compileIgnore, defaultIgnore } from "./ignore.js";
@@ -24,6 +23,7 @@ import {
   manifestObjectIds,
   combineScopedNamespace,
   projectNamespace,
+  scopeIncludes,
   scanNamespace,
   semanticDigest,
   validateNamespaceManifest,
@@ -49,7 +49,6 @@ import {
   snapshotPayload,
 } from "./hub.js";
 import {
-  captureTree,
   materializeManifest,
   ObjectStore,
   parseManifest,
@@ -73,7 +72,6 @@ import {
   type AdoptionPlan,
   type CatalogEntry,
   type ConflictRecord,
-  type GitBoundary,
   type HubCheckpoint,
   type NamespaceManifest,
   type ProductConfig,
@@ -115,8 +113,7 @@ export type NormalApplyFaultPoint =
   | "after-obsolete-recovery"
   | "after-moves-placed"
   | "after-directories"
-  | "after-leaves"
-  | "after-git";
+  | "after-leaves";
 
 export interface SyncFolderOptions {
   readonly fault?: (point: NormalApplyFaultPoint) => void;
@@ -477,6 +474,7 @@ export async function verifyFullV3(
       reasons.push(`Repository ${paused.path || "."}: ${paused.reason}`);
     const conflicts =
       state.heldOutboxCount() +
+      state.heldApplyCount() +
       activeConflictCount(await transport.conflicts(config.folderId));
     return {
       ...summary(
@@ -551,12 +549,12 @@ export async function syncFolderV3(
       applied,
       uploaded,
       downloaded,
-      conflicts + state.heldOutboxCount(),
+      conflicts + state.heldOutboxCount() + state.heldApplyCount(),
     );
     const retained =
-      state.heldOutboxCount() > 0
+      state.heldOutboxCount() + state.heldApplyCount() > 0
         ? [
-            "Earlier Git-context events are retained locally and were not replayed",
+            "Earlier Git-context events or interrupted applies are retained locally and were not replayed",
           ]
         : [];
     return scope !== null && scope.paused.length > 0
@@ -712,6 +710,7 @@ export async function syncFolderV3(
         options,
       )
     ) {
+      applied = true;
       baseline = loadBaseline(config);
       heldBaseline = baseline;
       local = scanNamespace(
@@ -968,11 +967,12 @@ export async function statusV3(config: ProductConfig): Promise<{
   readonly localCursor: number;
   readonly outboxEntries: number;
   readonly heldOutboxEntries: number;
+  readonly heldApplyEntries: number;
   readonly pendingJournals: number;
   readonly catalogEntries: number;
   readonly catalogHistoryEntries: number;
   readonly retainedTombstones: number;
-  readonly gitBoundaries: number;
+  readonly repositoryContexts: number;
   readonly recoveryEntries: number;
   readonly conflicts: readonly ConflictRecord[];
   readonly verifiedAdoptionPeers: readonly string[];
@@ -992,12 +992,13 @@ export async function statusV3(config: ProductConfig): Promise<{
     localCursor: state.sequence(),
     outboxEntries: state.outbox().length,
     heldOutboxEntries: state.heldOutboxCount(),
+    heldApplyEntries: state.heldApplyCount(),
     pendingJournals: state.journals().length,
     catalogEntries: state.catalog().length,
     catalogHistoryEntries: catalogHistory.length,
     retainedTombstones: catalogHistory.filter((entry) => entry.tombstone)
       .length,
-    gitBoundaries: baseline?.gitBoundaries.length ?? 0,
+    repositoryContexts: baseline?.repositories.length ?? 0,
     recoveryEntries: state
       .conflicts()
       .filter((conflict) => conflict.recoveryPath.length > 0).length,
@@ -1017,8 +1018,8 @@ export async function statusV3(config: ProductConfig): Promise<{
       hubReachable: true,
       hubError: null,
       hubSequence: checkpoint.sequence,
-      gitBoundaries:
-        checkpoint.snapshot?.gitBoundaries.length ?? local.gitBoundaries,
+      repositoryContexts:
+        checkpoint.snapshot?.repositories.length ?? local.repositoryContexts,
       conflicts: [...conflicts.values()],
       verifiedAdoptionPeers: await transport.verifiedAdoptionPeers(
         config.folderId,
@@ -1197,29 +1198,46 @@ export function recoverConflictV3(
   materializeManifest(conflict.manifestId, target, objects);
 }
 
-/** Restore one held event file privately; never inject it into a new checkout. */
+/** Recover a retained event or apply leaf privately, never into a checkout. */
 export function recoverHeldFileV3(
   config: ProductConfig,
   eventId: string,
   path: string,
+  before = false,
 ): string {
   verifyConfig(config);
   normalizeRelativePath(path);
   using state = new LocalState(config);
   const held = state.heldEvent(eventId);
-  if (typeof held !== "object" || held === null)
-    throw new Error("Held event is unavailable");
-  const event = held as SignedSnapshot;
-  validateNamespaceManifest(event.snapshot);
-  const peer = config.peers.find((value) => value.peerId === event.peerId);
-  if (
-    event.eventId !== eventId ||
-    event.snapshot.folderId !== config.folderId ||
-    peer === undefined ||
-    !verifyPayload(snapshotPayload(event), event.signature, peer.publicKey)
-  )
-    throw new Error("Held event signature or folder does not match");
-  const entry = event.snapshot.entries.find((entry) => entry.path === path);
+  let snapshot: NamespaceManifest;
+  if (typeof held === "object" && held !== null) {
+    if (before) throw new Error("A queued event has no pre-apply version");
+    const event = held as SignedSnapshot;
+    validateNamespaceManifest(event.snapshot);
+    const peer = config.peers.find((value) => value.peerId === event.peerId);
+    if (
+      event.eventId !== eventId ||
+      event.snapshot.folderId !== config.folderId ||
+      peer === undefined ||
+      !verifyPayload(snapshotPayload(event), event.signature, peer.publicKey)
+    )
+      throw new Error("Held event signature or folder does not match");
+    snapshot = event.snapshot;
+  } else {
+    const record = state
+      .journals()
+      .find(
+        (value) => value.id === eventId && value.kind === "held-snapshot-apply",
+      );
+    if (record === undefined)
+      throw new Error("Held recovery record is unavailable");
+    const journal = snapshotApplyJournal(record.value);
+    if (journal.folderId !== config.folderId)
+      throw new Error("Held apply belongs to another folder");
+    snapshot = before ? journal.current : journal.desired;
+    validateNamespacePolicy(snapshot, config);
+  }
+  const entry = snapshot.entries.find((entry) => entry.path === path);
   if (
     entry === undefined ||
     entry.kind === "directory" ||
@@ -1228,7 +1246,7 @@ export function recoverHeldFileV3(
     throw new Error("Held event has no recoverable leaf at that path");
   const target = safeTarget(
     config.stateDir,
-    `held-recovery/${hashText(eventId)}/${path}`,
+    `held-recovery/${hashText(eventId)}/${before ? "before" : "accepted"}/${path}`,
   );
   if (pathExists(target))
     throw new Error("Held recovery destination must be absent");
@@ -1331,7 +1349,6 @@ function reattachRestoredNodes(
     entries,
     digest: semanticDigest(
       entries,
-      snapshot.gitBoundaries,
       snapshot.ignoreDigest,
       snapshot.repositories,
     ),
@@ -1456,7 +1473,6 @@ async function fetchSnapshotObjects(
     ...snapshot.entries.flatMap((entry) =>
       entry.manifestId === null ? [] : [entry.manifestId],
     ),
-    ...snapshot.gitBoundaries.map((boundary) => boundary.manifestId),
   ];
   const visited = new Set<string>();
   let downloaded = 0;
@@ -1561,41 +1577,6 @@ function classifyAdoption(
       bytes: targetEntry.size,
     });
   }
-  const sourceGit = new Map(
-    source.gitBoundaries.map((value) => [value.worktreePath, value]),
-  );
-  const targetGit = new Map(
-    target.gitBoundaries.map((value) => [value.worktreePath, value]),
-  );
-  for (const [worktree, boundary] of sourceGit) {
-    const targetBoundary = targetGit.get(worktree);
-    const path = worktree ? `${worktree}/.git` : ".git";
-    differences.push({
-      path,
-      classification:
-        targetBoundary === undefined
-          ? "source-only"
-          : targetBoundary.kind !== boundary.kind
-            ? "type-conflicting"
-            : targetBoundary.manifestId === boundary.manifestId
-              ? "exact"
-              : "divergent",
-      sourcePath: path,
-      targetPath: targetBoundary === undefined ? null : path,
-      bytes: 0,
-    });
-  }
-  for (const [worktree] of targetGit)
-    if (!sourceGit.has(worktree)) {
-      const path = worktree ? `${worktree}/.git` : ".git";
-      differences.push({
-        path,
-        classification: "target-only",
-        sourcePath: null,
-        targetPath: path,
-        bytes: 0,
-      });
-    }
   return differences.sort((left, right) =>
     left.path.localeCompare(right.path, "en"),
   );
@@ -1660,18 +1641,6 @@ async function preserveAdoptionDifferences(
       difference.path,
     );
     const entry = targetByPath.get(difference.path);
-    const worktreePath =
-      difference.path === ".git"
-        ? ""
-        : difference.path.endsWith("/.git")
-          ? difference.path.slice(0, -5)
-          : null;
-    const gitBoundary =
-      worktreePath === null
-        ? undefined
-        : plan.targetSnapshot.gitBoundaries.find(
-            (boundary) => boundary.worktreePath === worktreePath,
-          );
     const conflictId = `adoption:${plan.adoptionId}:${hashText(difference.path).slice(0, 16)}`;
     const existingConflict = state
       .conflicts()
@@ -1679,16 +1648,12 @@ async function preserveAdoptionDifferences(
     const evidencePath = pathExists(recovery) ? recovery : live;
     const manifestId =
       existingConflict?.manifestId ??
-      gitBoundary?.manifestId ??
       (entry?.kind === "directory"
         ? captureSnapshotSubtree(entry, plan.targetSnapshot, objects)
         : (entry?.manifestId ?? null));
     const conflict: ConflictRecord = {
       conflictId,
-      kind:
-        difference.path.endsWith("/.git") || difference.path === ".git"
-          ? "git"
-          : "adoption",
+      kind: "adoption",
       peerId: config.peerId,
       originalPath: difference.path,
       recoveryPath: recovery,
@@ -1696,20 +1661,10 @@ async function preserveAdoptionDifferences(
       reason: difference.classification,
       createdAt: new Date().toISOString(),
     };
-    const liveIsSource =
-      worktreePath === null
-        ? sameContentOptional(
-            currentByPath.get(difference.path),
-            sourceByPath.get(difference.path),
-          )
-        : gitEqual(
-            target.gitBoundaries.find(
-              (boundary) => boundary.worktreePath === worktreePath,
-            ),
-            source.gitBoundaries.find(
-              (boundary) => boundary.worktreePath === worktreePath,
-            ),
-          );
+    const liveIsSource = sameContentOptional(
+      currentByPath.get(difference.path),
+      sourceByPath.get(difference.path),
+    );
     if (pathExists(live) && pathExists(recovery) && !liveIsSource)
       throw new Error(
         `Adoption recovery and unverified live target both exist: ${difference.path}`,
@@ -1824,23 +1779,6 @@ function assertAdoptionResumeState(
         `Target changed outside the resumable adoption transaction: ${entry.path}`,
       );
   }
-  const plannedGit = new Map(
-    plan.targetSnapshot.gitBoundaries.map((value) => [
-      value.worktreePath,
-      value,
-    ]),
-  );
-  const sourceGit = new Map(
-    source.gitBoundaries.map((value) => [value.worktreePath, value]),
-  );
-  for (const boundary of current.gitBoundaries)
-    if (
-      !gitEqual(boundary, plannedGit.get(boundary.worktreePath)) &&
-      !gitEqual(boundary, sourceGit.get(boundary.worktreePath))
-    )
-      throw new Error(
-        `Git state changed outside the resumable adoption transaction: ${boundary.worktreePath || "."}`,
-      );
 }
 
 function assertAdoptionRecovery(
@@ -1903,31 +1841,6 @@ function assertAdoptionRecovery(
       `Adoption recovery has unreferenced content: ${entry.path}`,
     );
   }
-  const expectedGit = new Map(
-    plan.targetSnapshot.gitBoundaries
-      .filter((boundary) =>
-        included(
-          boundary.worktreePath ? `${boundary.worktreePath}/.git` : ".git",
-        ),
-      )
-      .map((boundary) => [boundary.worktreePath, boundary]),
-  );
-  const recoveredGit = new Map(
-    recovered.gitBoundaries.map((boundary) => [
-      boundary.worktreePath,
-      boundary,
-    ]),
-  );
-  for (const [worktree, expected] of expectedGit)
-    if (!gitEqual(recoveredGit.get(worktree), expected))
-      throw new Error(
-        `Adoption recovery Git state mismatch: ${worktree || "."}`,
-      );
-  for (const worktree of recoveredGit.keys())
-    if (!expectedGit.has(worktree))
-      throw new Error(
-        `Adoption recovery has unreferenced Git state: ${worktree || "."}`,
-      );
 }
 
 interface SnapshotApplyJournal {
@@ -1936,8 +1849,193 @@ interface SnapshotApplyJournal {
   readonly current: NamespaceManifest;
   readonly desired: NamespaceManifest;
   readonly recoveryRoot: string;
+  readonly moveStageRoot: string;
   readonly scope: RepositoryScope | null;
   readonly acceptedDigest: string;
+}
+
+interface ApplyMoveIntent {
+  readonly applyId: string;
+  readonly paths: readonly string[];
+}
+
+function applyScopeSubset(
+  scope: RepositoryScope,
+  active: readonly RepositoryContext[],
+  reason: string,
+): RepositoryScope {
+  const included = new Set(active.map((context) => context.path));
+  const previous = new Map(
+    scope.paused.map((value) => [value.path, value.reason]),
+  );
+  return {
+    paths: scope.paths,
+    active,
+    guards: scope.guards.filter((guard) =>
+      active.some(
+        (context) =>
+          context.path !== guard.path &&
+          (guard.path === "" || context.path.startsWith(`${guard.path}/`)),
+      ),
+    ),
+    paused: scope.paths
+      .filter((path) => !included.has(path))
+      .map((path) => ({
+        path,
+        reason: previous.get(path) ?? reason,
+      })),
+  };
+}
+
+/** Unknown Git state waits; proved context changes retain intent without replay. */
+function resumableApplyScope(
+  config: ProductConfig,
+  journal: SnapshotApplyJournal,
+  accepted?: NamespaceManifest,
+): {
+  readonly scope: RepositoryScope | null;
+  readonly changed: readonly RepositoryContext[];
+} {
+  if (journal.scope === null) return { scope: null, changed: [] };
+  const observations = new Map<string, RepositoryContext | null>();
+  const active: RepositoryContext[] = [];
+  const changed: RepositoryContext[] = [];
+  for (const context of journal.scope.active) {
+    const expected = [
+      context,
+      ...journal.scope.guards.filter(
+        (guard) =>
+          guard.path !== context.path &&
+          (guard.path === "" || context.path.startsWith(`${guard.path}/`)),
+      ),
+    ];
+    let unknown = false;
+    let different = false;
+    for (const value of expected) {
+      let actual: RepositoryContext;
+      try {
+        const observed = observations.has(value.path)
+          ? observations.get(value.path)
+          : inspectRepositoryContext(config.root, value.path);
+        if (observed === null || observed === undefined) {
+          unknown = true;
+          continue;
+        }
+        actual = observed;
+        observations.set(value.path, actual);
+      } catch {
+        observations.set(value.path, null);
+        unknown = true;
+        continue;
+      }
+      if (canonicalJson(actual) !== canonicalJson(value)) different = true;
+    }
+    if (accepted !== undefined) {
+      const remote = accepted.repositories.find(
+        (value) => value.path === context.path,
+      );
+      if (canonicalJson(remote) !== canonicalJson(context)) different = true;
+    }
+    if (different) changed.push(context);
+    else if (!unknown) active.push(context);
+  }
+  return {
+    scope: applyScopeSubset(
+      journal.scope,
+      active,
+      "Interrupted repository apply is suspended",
+    ),
+    changed,
+  };
+}
+
+function retainChangedApplyScopes(
+  config: ProductConfig,
+  state: LocalState,
+  accepted?: NamespaceManifest,
+): void {
+  for (const record of state.journals()) {
+    if (record.kind !== "snapshot-apply") continue;
+    const journal = snapshotApplyJournal(record.value);
+    const { changed } = resumableApplyScope(config, journal, accepted);
+    if (changed.length === 0 || journal.scope === null) continue;
+    const changedPaths = new Set(changed.map((context) => context.path));
+    const remaining = journal.scope.active.filter(
+      (context) => !changedPaths.has(context.path),
+    );
+    const scope = applyScopeSubset(
+      journal.scope,
+      remaining,
+      "Changed Git context retained in private recovery",
+    );
+    const retainedId = `held-apply:${randomUUID()}`;
+    const upsert: Parameters<
+      LocalState["rewriteJournals"]
+    >[0]["upsert"][number][] = [
+      {
+        id: retainedId,
+        kind: "held-snapshot-apply",
+        status: "retained",
+        value: {
+          ...journal,
+          heldPaths: [...changedPaths],
+          reason: "Git context changed during interrupted apply",
+        },
+      },
+    ];
+    if (remaining.length > 0)
+      upsert.push({
+        id: record.id,
+        kind: "snapshot-apply",
+        status: record.status,
+        value: {
+          ...journal,
+          current: projectNamespace(journal.current, scope),
+          desired: projectNamespace(journal.desired, scope),
+          scope,
+        },
+      });
+    for (const child of state.journals()) {
+      if (
+        typeof child.value !== "object" ||
+        child.value === null ||
+        !("applyId" in child.value) ||
+        child.value.applyId !== record.id
+      )
+        continue;
+      const intent = parseApplyMoveIntent(child.value);
+      if (intent.paths.every((path) => scopeIncludes(scope, path))) continue;
+      upsert.push({
+        id: child.id,
+        kind: "held-move",
+        status: "retained",
+        value: { ...child.value, applyId: retainedId },
+      });
+    }
+    state.rewriteJournals({
+      upsert,
+      remove: remaining.length === 0 ? [record.id] : [],
+    });
+  }
+}
+
+function parseApplyMoveIntent(value: unknown): ApplyMoveIntent {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("applyId" in value) ||
+    typeof value.applyId !== "string" ||
+    !("paths" in value) ||
+    !Array.isArray(value.paths) ||
+    value.paths.length === 0
+  )
+    throw new Error("Apply move intent is invalid");
+  const paths = value.paths.map((path: unknown) => {
+    if (typeof path !== "string") throw new Error("Apply move path is invalid");
+    normalizeRelativePath(path);
+    return path;
+  });
+  return { applyId: value.applyId, paths };
 }
 
 async function resumePendingSnapshotApply(
@@ -1949,88 +2047,145 @@ async function resumePendingSnapshotApply(
   live: NamespaceManifest,
   options: SyncFolderOptions,
 ): Promise<boolean> {
+  if (checkpoint.snapshot !== null)
+    retainChangedApplyScopes(config, state, checkpoint.snapshot);
   const pending = state
     .journals()
     .filter((journal) => journal.kind === "snapshot-apply");
   if (pending.length === 0) return false;
-  if (pending.length !== 1)
-    throw new Error("Multiple snapshot apply transactions are pending");
-  const record = pending[0];
-  if (record === undefined) return false;
-  const journal = snapshotApplyJournal(record.value);
-  if (journal.folderId !== config.folderId)
-    throw new Error("Snapshot apply journal belongs to another folder");
-  const recoveryBase = resolve(config.stateDir, "apply-recovery");
-  if (!journal.recoveryRoot.startsWith(`${recoveryBase}${sep}`))
-    throw new Error("Snapshot apply recovery path escapes local state");
-  const history = await transport.history(config.folderId);
-  if (
-    !history.some(
-      (event) =>
-        Number(event.sequence) === journal.acceptedSequence &&
-        String(event.snapshot_digest) === journal.acceptedDigest,
+  let applied = false;
+  for (const record of [...pending].sort(
+    (left, right) =>
+      snapshotApplyJournal(left.value).acceptedSequence -
+      snapshotApplyJournal(right.value).acceptedSequence,
+  )) {
+    const journal = snapshotApplyJournal(record.value);
+    const { scope } = resumableApplyScope(
+      config,
+      journal,
+      checkpoint.snapshot ?? undefined,
+    );
+    if (scope !== null && scope.active.length === 0) continue;
+    const current =
+      scope === null
+        ? journal.current
+        : projectNamespace(journal.current, scope);
+    const desired =
+      scope === null
+        ? journal.desired
+        : projectNamespace(journal.desired, scope);
+    if (journal.folderId !== config.folderId)
+      throw new Error("Snapshot apply journal belongs to another folder");
+    const recoveryBase = resolve(config.stateDir, "apply-recovery");
+    if (!journal.recoveryRoot.startsWith(`${recoveryBase}${sep}`))
+      throw new Error("Snapshot apply recovery path escapes local state");
+    const stagingBase = resolve(config.stateDir, "staging");
+    if (!journal.moveStageRoot.startsWith(`${stagingBase}${sep}`))
+      throw new Error("Snapshot apply staging path escapes local state");
+    const history = await transport.history(config.folderId);
+    if (
+      !history.some(
+        (event) =>
+          Number(event.sequence) === journal.acceptedSequence &&
+          String(event.snapshot_digest) === journal.acceptedDigest,
+      )
     )
-  )
-    throw new Error("Snapshot apply journal is not an accepted hub event");
-  if (
-    checkpoint.sequence < journal.acceptedSequence ||
-    checkpoint.snapshot === null
-  )
-    throw new Error("Hub checkpoint is behind a pending snapshot apply");
-  manifestObjectIds(journal.desired, objects);
-  const scopedLive =
-    journal.scope === null ? live : projectNamespace(live, journal.scope);
-  assertResumableSnapshotApply(scopedLive, journal.current, journal.desired);
-  await applySnapshot(
-    config,
-    state,
-    objects,
-    scopedLive,
-    journal.desired,
-    "normal",
-    journal.acceptedSequence,
-    options,
-    journal.scope,
-    journal.acceptedDigest,
-  );
-  const verified = scanNamespace(
-    config,
-    objects,
-    ensureIgnore(config.root),
-    journal.desired.entries,
-    true,
-    true,
-    journal.scope === null
-      ? undefined
-      : {
-          accepted: journal.desired,
-          baseline: journal.current,
-          scope: journal.scope,
-        },
-  );
-  assertDigest(verified.manifest, journal.desired);
-  const baseline = loadBaseline(config);
-  if (journal.scope !== null && baseline === null)
-    throw new Error("Scoped recovery has no local baseline");
-  state.replaceCatalog(
-    journal.scope === null
-      ? verified.manifest.entries
-      : combineScopedNamespace(
-          verified.manifest,
-          { ...baseline!, entries: state.catalog() },
-          journal.scope,
-        ).entries,
-    journal.acceptedSequence,
-  );
-  state.acceptBaseline(journal.acceptedSequence, journal.acceptedDigest);
-  saveBaseline(
-    config,
-    journal.scope === null
-      ? journal.desired
-      : combineScopedNamespace(journal.desired, baseline!, journal.scope),
-  );
-  state.completeJournal(record.id);
-  return true;
+      throw new Error("Snapshot apply journal is not an accepted hub event");
+    if (
+      checkpoint.sequence < journal.acceptedSequence ||
+      checkpoint.snapshot === null
+    )
+      throw new Error("Hub checkpoint is behind a pending snapshot apply");
+    manifestObjectIds(desired, objects);
+    const observed = applied
+      ? scanNamespace(
+          config,
+          objects,
+          ensureIgnore(config.root),
+          state.catalog(),
+          true,
+          false,
+          scope === null
+            ? undefined
+            : { accepted: desired, baseline: current, scope },
+        ).manifest
+      : live;
+    const scopedLive =
+      scope === null ? observed : projectNamespace(observed, scope);
+    assertResumableSnapshotApply(scopedLive, current, desired);
+    await applySnapshot(
+      config,
+      state,
+      objects,
+      scopedLive,
+      desired,
+      "normal",
+      journal.acceptedSequence,
+      options,
+      scope,
+      journal.acceptedDigest,
+      record.id,
+    );
+    const verified = scanNamespace(
+      config,
+      objects,
+      ensureIgnore(config.root),
+      desired.entries,
+      true,
+      true,
+      scope === null
+        ? undefined
+        : {
+            accepted: desired,
+            baseline: current,
+            scope,
+          },
+    );
+    assertDigest(verified.manifest, desired);
+    const baseline = loadBaseline(config);
+    if (scope !== null && baseline === null)
+      throw new Error("Scoped recovery has no local baseline");
+    state.replaceCatalog(
+      scope === null
+        ? verified.manifest.entries
+        : combineScopedNamespace(
+            verified.manifest,
+            { ...baseline!, entries: state.catalog() },
+            scope,
+          ).entries,
+      Math.max(state.sequence(), journal.acceptedSequence),
+    );
+    if (state.sequence() <= journal.acceptedSequence)
+      state.acceptBaseline(journal.acceptedSequence, journal.acceptedDigest);
+    saveBaseline(
+      config,
+      scope === null
+        ? desired
+        : combineScopedNamespace(desired, baseline!, scope),
+    );
+    const remaining =
+      journal.scope?.active.filter(
+        (context) =>
+          !scope?.active.some((value) => value.path === context.path),
+      ) ?? [];
+    if (remaining.length === 0 || journal.scope === null)
+      state.completeJournal(record.id);
+    else {
+      const waiting = applyScopeSubset(
+        journal.scope,
+        remaining,
+        "Repository apply completed in an independent scope",
+      );
+      state.putJournal(record.id, "snapshot-apply", {
+        ...journal,
+        current: projectNamespace(journal.current, waiting),
+        desired: projectNamespace(journal.desired, waiting),
+        scope: waiting,
+      });
+    }
+    applied = true;
+  }
+  return applied;
 }
 
 function snapshotApplyJournal(value: unknown): SnapshotApplyJournal {
@@ -2042,6 +2197,7 @@ function snapshotApplyJournal(value: unknown): SnapshotApplyJournal {
     !Number.isSafeInteger(input.acceptedSequence) ||
     Number(input.acceptedSequence) < 1 ||
     typeof input.recoveryRoot !== "string" ||
+    typeof input.moveStageRoot !== "string" ||
     typeof input.current !== "object" ||
     input.current === null ||
     typeof input.desired !== "object" ||
@@ -2052,6 +2208,15 @@ function snapshotApplyJournal(value: unknown): SnapshotApplyJournal {
   const desired = input.desired as NamespaceManifest;
   validateNamespaceManifest(current);
   validateNamespaceManifest(desired);
+  if (
+    current.folderId !== input.folderId ||
+    desired.folderId !== input.folderId ||
+    current.ignoreDigest !== desired.ignoreDigest ||
+    canonicalJson(current.repositories) !== canonicalJson(desired.repositories)
+  )
+    throw new Error(
+      "Apply journal snapshots do not share one folder and context",
+    );
   assertHash(input.acceptedDigest as string, "Apply journal accepted digest");
   const scope =
     input.scope === null ? null : parseApplyScope(input.scope, desired);
@@ -2061,6 +2226,7 @@ function snapshotApplyJournal(value: unknown): SnapshotApplyJournal {
     current,
     desired,
     recoveryRoot: resolve(input.recoveryRoot),
+    moveStageRoot: resolve(input.moveStageRoot),
     scope,
     acceptedDigest: input.acceptedDigest as string,
   };
@@ -2116,7 +2282,7 @@ function parseApplyScope(
   validateNamespaceManifest({
     ...desired,
     repositories: guards,
-    digest: semanticDigest(desired.entries, [], desired.ignoreDigest, guards),
+    digest: semanticDigest(desired.entries, desired.ignoreDigest, guards),
   });
   if (
     guards.some(
@@ -2152,20 +2318,6 @@ function assertResumableSnapshotApply(
       throw new Error(
         `Local namespace changed during interrupted apply: ${entry.path}`,
       );
-  const currentGit = new Map(
-    current.gitBoundaries.map((boundary) => [boundary.worktreePath, boundary]),
-  );
-  const desiredGit = new Map(
-    desired.gitBoundaries.map((boundary) => [boundary.worktreePath, boundary]),
-  );
-  for (const boundary of live.gitBoundaries)
-    if (
-      !gitEqual(boundary, currentGit.get(boundary.worktreePath)) &&
-      !gitEqual(boundary, desiredGit.get(boundary.worktreePath))
-    )
-      throw new Error(
-        `Git state changed during interrupted apply: ${boundary.worktreePath || "."}`,
-      );
 }
 
 async function applySnapshot(
@@ -2179,6 +2331,7 @@ async function applySnapshot(
   options: SyncFolderOptions = {},
   scope: RepositoryScope | null = null,
   acceptedDigest = desired.digest,
+  resumedJournalId: string | null = null,
 ): Promise<string | null> {
   validateNamespacePolicy(desired, config);
   using gitLease = acquireGitLease(config, current.repositories, scope?.guards);
@@ -2196,7 +2349,9 @@ async function applySnapshot(
       );
   }
   const journalId =
-    recoveryKind === "normal" ? `snapshot-apply:${desired.digest}` : null;
+    recoveryKind === "normal"
+      ? (resumedJournalId ?? `snapshot-apply:${desired.digest}`)
+      : null;
   const existingJournal =
     journalId === null
       ? null
@@ -2209,6 +2364,10 @@ async function applySnapshot(
           `${recoveryKind}-${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID()}`,
         )
       : snapshotApplyJournal(existingJournal.value).recoveryRoot;
+  const moveStageRoot =
+    existingJournal === null
+      ? join(config.stateDir, "staging", `moves-${desired.digest}`)
+      : snapshotApplyJournal(existingJournal.value).moveStageRoot;
   if (journalId !== null && existingJournal === null) {
     state.putJournal(journalId, "snapshot-apply", {
       folderId: config.folderId,
@@ -2216,6 +2375,7 @@ async function applySnapshot(
       current,
       desired,
       recoveryRoot,
+      moveStageRoot,
       scope,
       acceptedDigest,
     });
@@ -2243,11 +2403,6 @@ async function applySnapshot(
   );
   const desiredByNode = new Map(
     desired.entries.map((entry) => [entry.nodeId, entry]),
-  );
-  const moveStageRoot = join(
-    config.stateDir,
-    "staging",
-    `moves-${desired.digest}`,
   );
   const interruptedCurrent =
     existingJournal === null
@@ -2294,7 +2449,14 @@ async function applySnapshot(
     const stage = join(moveStageRoot, move.from.nodeId);
     if (pathExists(from) && !pathExists(stage)) {
       mkdirSync(dirname(stage), { recursive: true, mode: 0o700 });
-      renameWithJournal(state, from, stage);
+      renameWithJournal(
+        state,
+        from,
+        stage,
+        journalId === null
+          ? undefined
+          : { applyId: journalId, paths: [move.from.path, move.to.path] },
+      );
     }
     if (pathExists(stage)) stagedMoves.set(move.from.nodeId, stage);
   }
@@ -2321,6 +2483,7 @@ async function applySnapshot(
       safeRecoveryTarget(recoveryRoot, entry.path),
       "apply-recovery",
       current,
+      journalId,
     );
   }
   options.fault?.("after-obsolete-recovery");
@@ -2345,9 +2508,19 @@ async function applySnapshot(
         to,
         safeRecoveryTarget(recoveryRoot, move.to.path),
         "apply-recovery",
+        journalId === null
+          ? undefined
+          : { applyId: journalId, paths: [move.from.path, move.to.path] },
       );
     mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
-    renameWithJournal(state, stage, to);
+    renameWithJournal(
+      state,
+      stage,
+      to,
+      journalId === null
+        ? undefined
+        : { applyId: journalId, paths: [move.from.path, move.to.path] },
+    );
   }
   options.fault?.("after-moves-placed");
 
@@ -2363,6 +2536,9 @@ async function applySnapshot(
         target,
         safeRecoveryTarget(recoveryRoot, entry.path),
         "apply-recovery",
+        journalId === null
+          ? undefined
+          : { applyId: journalId, paths: [entry.path] },
       );
     }
     mkdirSync(target, { recursive: false, mode: 0o700 });
@@ -2388,6 +2564,9 @@ async function applySnapshot(
         target,
         safeRecoveryTarget(recoveryRoot, entry.path),
         "apply-recovery",
+        journalId === null
+          ? undefined
+          : { applyId: journalId, paths: [entry.path] },
       );
     if (entry.manifestId === null)
       throw new Error(`Desired leaf has no manifest: ${entry.path}`);
@@ -2399,91 +2578,7 @@ async function applySnapshot(
     renameSync(stage, target);
   }
   options.fault?.("after-leaves");
-  applyGitBoundaries(
-    config,
-    state,
-    objects,
-    current.gitBoundaries,
-    desired.gitBoundaries,
-    recoveryRoot,
-  );
-  options.fault?.("after-git");
   return journalId;
-}
-
-function applyGitBoundaries(
-  config: ProductConfig,
-  state: LocalState,
-  objects: ObjectStore,
-  current: readonly GitBoundary[],
-  desired: readonly GitBoundary[],
-  recoveryRoot: string,
-): void {
-  const currentByWorktree = new Map(
-    current.map((value) => [value.worktreePath, value]),
-  );
-  const desiredWorktrees = new Set(desired.map((value) => value.worktreePath));
-  for (const boundary of current)
-    if (!desiredWorktrees.has(boundary.worktreePath)) {
-      const gitEntry = safeGitEntry(config.root, boundary.worktreePath);
-      if (pathExists(gitEntry))
-        moveWithJournal(
-          state,
-          gitEntry,
-          safeRecoveryTarget(
-            recoveryRoot,
-            boundary.worktreePath ? `${boundary.worktreePath}/.git` : ".git",
-          ),
-          "git-recovery",
-        );
-    }
-  for (const boundary of desired) {
-    const existing = currentByWorktree.get(boundary.worktreePath);
-    if (
-      existing?.manifestId === boundary.manifestId &&
-      existing.kind === boundary.kind &&
-      existing.gitPath === boundary.gitPath
-    )
-      continue;
-    const gitDirectory = boundary.gitPath
-      ? safeTarget(config.root, boundary.gitPath)
-      : config.root;
-    const gitEntry = safeGitEntry(config.root, boundary.worktreePath);
-    if (pathExists(gitEntry))
-      moveWithJournal(
-        state,
-        gitEntry,
-        safeRecoveryTarget(
-          recoveryRoot,
-          boundary.worktreePath ? `${boundary.worktreePath}/.git` : ".git",
-        ),
-        "git-recovery",
-      );
-    if (pathExists(gitDirectory) && gitDirectory !== gitEntry)
-      moveWithJournal(
-        state,
-        gitDirectory,
-        safeRecoveryTarget(recoveryRoot, boundary.gitPath),
-        "git-recovery",
-      );
-    const stage = join(config.stateDir, "staging", `git-${randomUUID()}`);
-    materializeManifest(boundary.manifestId, stage, objects);
-    verifyGitDirectory(stage);
-    mkdirSync(dirname(gitDirectory), { recursive: true, mode: 0o700 });
-    renameSync(stage, gitDirectory);
-    if (boundary.kind !== "physical") {
-      mkdirSync(dirname(gitEntry), { recursive: true, mode: 0o700 });
-      const targetText = relative(dirname(gitEntry), gitDirectory).replaceAll(
-        sep,
-        "/",
-      );
-      writeFileSync(gitEntry, `gitdir: ${targetText}\n`, {
-        encoding: "utf8",
-        mode: 0o600,
-      });
-    }
-    verifyGitDirectory(gitDirectory);
-  }
 }
 
 function mergeSnapshots(
@@ -2503,11 +2598,6 @@ function mergeSnapshots(
   const resultByNode = new Map<string, CatalogEntry>();
   const conflictEntries: CatalogEntry[] = [];
   const handledNodes = new Set<string>();
-  const directoryConflicts: {
-    readonly localPath: string;
-    readonly remotePath: string | null;
-    readonly visiblePath: string;
-  }[] = [];
   const conflicts: ConflictRecord[] = [];
   const eventId = randomUUID();
   const preserveLocal = (
@@ -2519,11 +2609,6 @@ function mergeSnapshots(
   ) => {
     if (entry.kind === "directory") {
       const visible = conflictPath(entry.path, config.peerName, eventId);
-      directoryConflicts.push({
-        localPath: entry.path,
-        remotePath: remoteRoot?.kind === "directory" ? remoteRoot.path : null,
-        visiblePath: visible,
-      });
       for (const candidate of local.entries.filter(
         (value) =>
           value.path === entry.path || value.path.startsWith(`${entry.path}/`),
@@ -2698,29 +2783,15 @@ function mergeSnapshots(
   }
   ensureParentDirectories(result, remote, local);
   const entries = assignParentNodeIds([...result.values()]);
-  const gitBoundaries = mergeGitBoundaries(
-    baseline,
-    local,
-    remote,
-    conflicts,
-    config,
-    directoryConflicts,
-  );
   return {
     manifest: {
       schemaVersion,
       folderId: config.folderId,
       ignoreDigest: config.ignoreDigest,
       entries,
-      gitBoundaries,
       repositories: local.repositories,
       createdAt: new Date().toISOString(),
-      digest: semanticDigest(
-        entries,
-        gitBoundaries,
-        config.ignoreDigest,
-        local.repositories,
-      ),
+      digest: semanticDigest(entries, config.ignoreDigest, local.repositories),
     },
     conflicts,
   };
@@ -2740,18 +2811,8 @@ function captureSnapshotSubtree(
     values.push(entry);
     children.set(entry.parentPath, values);
   }
-  const git = new Map(
-    snapshot.gitBoundaries.map((boundary) => [boundary.worktreePath, boundary]),
-  );
   const capture = (directoryPath: string): string => {
     const entries: TreeManifestEntry[] = [];
-    const boundary = git.get(directoryPath);
-    if (boundary !== undefined)
-      entries.push({
-        name: ".git",
-        kind: "directory",
-        manifestId: boundary.manifestId,
-      });
     for (const entry of (children.get(directoryPath) ?? []).sort(
       (left, right) => left.name.localeCompare(right.name, "en"),
     )) {
@@ -2771,127 +2832,6 @@ function captureSnapshotSubtree(
     return objects.put(Buffer.from(canonicalJson(manifest), "utf8"));
   };
   return capture(root.path);
-}
-
-function mergeGitBoundaries(
-  baseline: NamespaceManifest,
-  local: NamespaceManifest,
-  remote: NamespaceManifest,
-  conflicts: ConflictRecord[],
-  config: ProductConfig,
-  directoryConflicts: readonly {
-    readonly localPath: string;
-    readonly remotePath: string | null;
-    readonly visiblePath: string;
-  }[],
-): readonly GitBoundary[] {
-  const base = gitBoundariesByNode(baseline);
-  const ours = gitBoundariesByNode(local);
-  const theirs = gitBoundariesByNode(remote);
-  const keys = new Set([...base.keys(), ...ours.keys(), ...theirs.keys()]);
-  const result: GitBoundary[] = [];
-  const handled = new Set<string>();
-  for (const directoryConflict of directoryConflicts) {
-    for (const [key, localBoundary] of ours) {
-      if (
-        localBoundary.worktreePath !== directoryConflict.localPath &&
-        !localBoundary.worktreePath.startsWith(
-          `${directoryConflict.localPath}/`,
-        )
-      )
-        continue;
-      const suffix = localBoundary.worktreePath.slice(
-        directoryConflict.localPath.length,
-      );
-      const worktreePath = `${directoryConflict.visiblePath}${suffix}`;
-      const gitPath = worktreePath ? `${worktreePath}/.git` : ".git";
-      result.push({
-        ...localBoundary,
-        boundaryId: hashText(`${worktreePath}\0${gitPath}`),
-        worktreePath,
-        gitPath,
-        kind: "physical",
-      });
-      handled.add(key);
-      const remoteBoundary = theirs.get(key);
-      if (remoteBoundary !== undefined) result.push(remoteBoundary);
-    }
-  }
-  for (const key of keys) {
-    if (handled.has(key)) continue;
-    const before = base.get(key);
-    const localValue = ours.get(key);
-    const remoteValue = theirs.get(key);
-    if (before === undefined) {
-      if (remoteValue !== undefined) result.push(remoteValue);
-      else if (localValue !== undefined) result.push(localValue);
-    } else if (localValue === undefined && remoteValue === undefined) {
-      continue;
-    } else if (localValue === undefined) {
-      if (!gitEqual(remoteValue, before) && remoteValue !== undefined) {
-        result.push(remoteValue);
-        conflicts.push(
-          gitConflict(
-            config,
-            before,
-            null,
-            "Git delete conflicted with an accepted mutation",
-          ),
-        );
-      }
-    } else if (remoteValue === undefined) {
-      if (!gitEqual(localValue, before))
-        conflicts.push(
-          gitConflict(
-            config,
-            before,
-            localValue,
-            "Accepted Git delete conflicted with a local mutation",
-          ),
-        );
-    } else if (gitEqual(localValue, before)) {
-      if (remoteValue !== undefined) result.push(remoteValue);
-    } else if (
-      gitEqual(remoteValue, before) ||
-      gitEqual(localValue, remoteValue)
-    ) {
-      result.push(localValue);
-    } else {
-      const placement = mergeGitComponent(
-        before,
-        localValue,
-        remoteValue,
-        (left, right) =>
-          left.worktreePath === right.worktreePath &&
-          left.gitPath === right.gitPath,
-      );
-      const content = mergeGitComponent(
-        before,
-        localValue,
-        remoteValue,
-        (left, right) =>
-          left.kind === right.kind && left.manifestId === right.manifestId,
-      );
-      if (placement === null || content === null) {
-        result.push(remoteValue);
-        conflicts.push(
-          gitConflict(config, remoteValue, localValue, "concurrent Git state"),
-        );
-      } else {
-        result.push({
-          ...content,
-          boundaryId: hashText(
-            `${placement.worktreePath}\0${placement.gitPath}`,
-          ),
-          worktreePath: placement.worktreePath,
-          gitPath: placement.gitPath,
-        });
-      }
-    }
-  }
-  return result.sort((left, right) =>
-    left.worktreePath.localeCompare(right.worktreePath, "en"),
-  );
 }
 
 function mergeEntryComponent(
@@ -2944,56 +2884,6 @@ function assignParentNodeIds(
   }));
 }
 
-function gitBoundariesByNode(
-  snapshot: NamespaceManifest,
-): Map<string, GitBoundary> {
-  const entries = new Map(snapshot.entries.map((entry) => [entry.path, entry]));
-  return new Map(
-    snapshot.gitBoundaries.map((boundary) => {
-      const nodeId =
-        boundary.worktreePath === ""
-          ? "$root"
-          : entries.get(boundary.worktreePath)?.nodeId;
-      if (nodeId === undefined)
-        throw new Error(
-          `Git boundary has no worktree node: ${boundary.worktreePath}`,
-        );
-      return [nodeId, boundary] as const;
-    }),
-  );
-}
-
-function mergeGitComponent(
-  baseline: GitBoundary,
-  local: GitBoundary,
-  remote: GitBoundary,
-  equal: (left: GitBoundary, right: GitBoundary) => boolean,
-): GitBoundary | null {
-  if (equal(local, baseline)) return remote;
-  if (equal(remote, baseline) || equal(local, remote)) return local;
-  return null;
-}
-
-function gitConflict(
-  config: ProductConfig,
-  canonical: GitBoundary,
-  local: GitBoundary | null,
-  reason: string,
-): ConflictRecord {
-  return {
-    conflictId: randomUUID(),
-    kind: "git",
-    peerId: config.peerId,
-    originalPath: canonical.worktreePath
-      ? `${canonical.worktreePath}/.git`
-      : ".git",
-    recoveryPath: "",
-    manifestId: local?.manifestId ?? null,
-    reason,
-    createdAt: new Date().toISOString(),
-  };
-}
-
 function ensureParentDirectories(
   entries: Map<string, CatalogEntry>,
   remote: NamespaceManifest,
@@ -3026,20 +2916,19 @@ function recoverInterruptedApplies(
   state: LocalState,
 ): void {
   recoverGitLease(config);
-  for (const journal of state.journals()) {
-    if (journal.kind !== "snapshot-apply") continue;
-    const pending = snapshotApplyJournal(journal.value);
-    assertRepositoryContexts(
-      config,
-      pending.current,
-      pending.desired,
-      pending.scope,
-    );
-  }
+  retainChangedApplyScopes(config, state);
+  const applies = new Map(
+    state
+      .journals()
+      .filter((journal) => journal.kind === "snapshot-apply")
+      .map((journal) => [journal.id, snapshotApplyJournal(journal.value)]),
+  );
   for (const journal of state.journals()) {
     if (
       journal.kind === "adoption-apply" ||
       journal.kind === "snapshot-apply" ||
+      journal.kind === "held-snapshot-apply" ||
+      journal.kind === "held-move" ||
       journal.kind === "cutover" ||
       journal.kind === "authority-setup" ||
       journal.kind === "peer-role" ||
@@ -3049,6 +2938,18 @@ function recoverInterruptedApplies(
     if (typeof journal.value !== "object" || journal.value === null)
       throw new Error(`Invalid recovery journal: ${journal.id}`);
     const value = journal.value as Record<string, unknown>;
+    if ("applyId" in value) {
+      const intent = parseApplyMoveIntent(value);
+      const parent = applies.get(intent.applyId);
+      if (parent === undefined)
+        throw new Error("Apply move has no pending parent transaction");
+      const { scope } = resumableApplyScope(config, parent);
+      if (
+        scope !== null &&
+        !intent.paths.every((path) => scopeIncludes(scope, path))
+      )
+        continue;
+    }
     const source =
       typeof value.source === "string" ? resolve(value.source) : null;
     const destination =
@@ -3058,10 +2959,15 @@ function recoverInterruptedApplies(
     const roots = [resolve(config.root), resolve(config.stateDir)];
     if (
       ![source, destination].every((path) =>
-        roots.some((root) => path === root || path.startsWith(`${root}${sep}`)),
+        roots.some((root) => path.startsWith(`${root}${sep}`)),
       )
     )
       throw new Error(`Recovery journal escapes owned paths: ${journal.id}`);
+    for (const path of [source, destination]) {
+      const root = roots.find((root) => path.startsWith(`${root}${sep}`));
+      if (root === undefined) throw new Error("Recovery parent is not owned");
+      safeTarget(root, relative(root, path).replaceAll(sep, "/"));
+    }
     if (!pathExists(source) && pathExists(destination)) {
       mkdirSync(dirname(source), { recursive: true, mode: 0o700 });
       renameSync(destination, source);
@@ -3074,9 +2980,10 @@ function renameWithJournal(
   state: LocalState,
   source: string,
   destination: string,
+  intent?: ApplyMoveIntent,
 ): void {
   const id = randomUUID();
-  state.putJournal(id, "rename", { source, destination });
+  state.putJournal(id, "rename", { source, destination, ...intent });
   renameSync(source, destination);
   state.completeJournal(id);
 }
@@ -3086,12 +2993,13 @@ function moveWithJournal(
   source: string,
   destination: string,
   kind: string,
+  intent?: ApplyMoveIntent,
 ): void {
   if (pathExists(destination))
     throw new Error(`Recovery destination already exists: ${destination}`);
   mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
   const id = randomUUID();
-  state.putJournal(id, kind, { source, destination });
+  state.putJournal(id, kind, { source, destination, ...intent });
   renameSync(source, destination);
   state.completeJournal(id);
 }
@@ -3128,13 +3036,20 @@ function moveScopedWithJournal(
   destination: string,
   kind: string,
   snapshot: NamespaceManifest,
+  applyId: string | null = null,
 ): void {
   const path = relative(config.root, source).replaceAll(sep, "/");
   if (
     !lstatSync(source).isDirectory() ||
     directoryFullyIncluded(config, path, snapshot)
   ) {
-    moveWithJournal(state, source, destination, kind);
+    moveWithJournal(
+      state,
+      source,
+      destination,
+      kind,
+      applyId === null ? undefined : { applyId, paths: [path] },
+    );
     return;
   }
   mkdirSync(destination, { recursive: true, mode: 0o700 });
@@ -3148,6 +3063,7 @@ function moveScopedWithJournal(
       join(destination, child.name),
       kind,
       snapshot,
+      applyId,
     );
   }
   if (readdirSync(source).length === 0) rmdirSync(source);
@@ -3159,22 +3075,6 @@ function safeRecoveryTarget(root: string, path: string): string {
   if (target !== absolute && !target.startsWith(`${absolute}${sep}`))
     throw new Error(`Recovery path escapes owned root: ${path}`);
   return target;
-}
-
-function safeGitEntry(root: string, worktreePath: string): string {
-  return worktreePath
-    ? safeTarget(root, `${worktreePath}/.git`)
-    : join(resolve(root), ".git");
-}
-
-function verifyGitDirectory(path: string): void {
-  const result = spawnSync(
-    "git",
-    ["--no-optional-locks", `--git-dir=${path}`, "fsck", "--full"],
-    { encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } },
-  );
-  if (result.status !== 0)
-    throw new Error(`Git verification failed: ${result.stderr.trim()}`);
 }
 
 function assertAcceptedConfig(
@@ -3363,15 +3263,6 @@ function manifestDifference(
     if (left?.executable !== right?.executable)
       return `${path} (executable bit)`;
   }
-  const expectedGit = new Map(
-    expected.gitBoundaries.map((boundary) => [boundary.worktreePath, boundary]),
-  );
-  const actualGit = new Map(
-    actual.gitBoundaries.map((boundary) => [boundary.worktreePath, boundary]),
-  );
-  for (const path of new Set([...expectedGit.keys(), ...actualGit.keys()]))
-    if (!gitEqual(expectedGit.get(path), actualGit.get(path)))
-      return path ? `${path}/.git` : ".git";
   return "semantic digest changed without a visible entry difference";
 }
 
@@ -3407,20 +3298,6 @@ function entryEqual(
     left.path === right.path &&
     left.nodeId === right.nodeId &&
     sameContent(left, right)
-  );
-}
-
-function gitEqual(
-  left: GitBoundary | undefined,
-  right: GitBoundary | undefined,
-): boolean {
-  if (left === undefined || right === undefined) return left === right;
-  return (
-    left.boundaryId === right.boundaryId &&
-    left.worktreePath === right.worktreePath &&
-    left.gitPath === right.gitPath &&
-    left.kind === right.kind &&
-    left.manifestId === right.manifestId
   );
 }
 
@@ -3481,11 +3358,7 @@ function message(error: unknown): string {
 }
 
 function activeConflictCount(conflicts: readonly ConflictRecord[]): number {
-  return conflicts.filter(
-    (conflict) =>
-      conflict.kind === "normal" ||
-      (conflict.kind === "git" && conflict.recoveryPath.length === 0),
-  ).length;
+  return conflicts.filter((conflict) => conflict.kind === "normal").length;
 }
 
 function adoptionConflictCount(

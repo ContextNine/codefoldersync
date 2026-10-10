@@ -4,7 +4,8 @@ This repository owns the CodeFolderSync product and its destructive-systems safe
 
 - Always work on master unless instructed not to.
 - CodeFolderSync has no hosted control plane. Do not add accounts, browser authorization, billing, or an external sync binary.
-- Synchronize one recursively discovered namespace through immutable V3 manifests and causally based signed checkpoints. Never reconcile individual `.git` files; each discovered contained Git directory applies as one validated transaction.
+- Synchronize one recursively discovered policy-scoped namespace through immutable V3 manifests and causally based signed checkpoints. Git metadata stays local. Preserve each repository's checkout, index, remotes, and hooks; never mirror `.git` or change its branch as a synchronization step.
+- Default-branch working-file transfer requires matching repository identity, branch, and HEAD. Independently pause nested contexts. Advance a HEAD only through a proved local fast-forward and a committed-tree baseline. Retain old-context events and interrupted apply data privately instead of replaying them into another checkout.
 - A stale compare-and-swap parent creates deterministic keep-both conflict entries. An unreachable hub, corrupt object, ambiguous local state, or unsafe filesystem traversal must retain queued work and fail closed for the affected path.
 - Preserve immutable objects, event history, conflict records, and recovery data by default.
 - Scan symlinks with `lstat`, store only their target text, and never follow them during capture or apply.

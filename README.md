@@ -133,7 +133,7 @@ codefoldersync adoption apply --adoption-id <id> --config /target/config.json
 codefoldersync adoption verify --config /target/config.json
 ```
 
-`plan` does not mutate the target tree. `apply` revalidates the approved target digest, preserves conflicts out of root, materializes the seal, force-hashes the result, verifies Git boundaries, and records the target as verified.
+`plan` does not mutate the target tree. `apply` revalidates the approved target digest, preserves conflicts out of root, materializes the included seal, force-hashes the result, and records the target as verified. Git metadata stays local; the default-branch policy also verifies each eligible repository's identity, branch, and HEAD.
 
 After every enrolled target verifies, cutover requires an explicit approval flag:
 

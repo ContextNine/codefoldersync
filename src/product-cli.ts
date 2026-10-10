@@ -218,7 +218,12 @@ async function main(): Promise<void> {
         );
       const config = load(args);
       const destination = await withExclusiveWriter(config, async () =>
-        recoverHeldFileV3(config, eventId, requiredOption(args, "--path")),
+        recoverHeldFileV3(
+          config,
+          eventId,
+          requiredOption(args, "--path"),
+          flag(args, "--before"),
+        ),
       );
       printJson({
         recovered: true,
@@ -1405,7 +1410,7 @@ Commands:
   codefoldersync config update-ignore --previous-ignore <path> [--approve]
   codefoldersync catalog status [--config <path>]
   codefoldersync recover <conflict-id> --to <absent-path>
-  codefoldersync recover-held <event-id> --path <relative-file>
+  codefoldersync recover-held <event-or-apply-id> --path <relative-file> [--before]
   codefoldersync promote-conflict <conflict-id> [--to <relative-absent-path>]
   codefoldersync service <install|start|stop|restart|status|logs|uninstall>
   codefoldersync acceptance witness --root <path>

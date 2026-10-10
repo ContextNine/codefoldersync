@@ -1157,7 +1157,6 @@ test("AI workload records a large multi-directory mutation and replays it exactl
       folderId: "test-folder",
       ignoreDigest: "a".repeat(64),
       entries: [catalogEntry(nodeId)],
-      gitBoundaries: [],
       repositories: [],
       createdAt: "2026-08-30T00:00:00.000Z",
       digest: "0".repeat(64),
@@ -1165,8 +1164,8 @@ test("AI workload records a large multi-directory mutation and replays it exactl
     const firstManifest = manifest("first-node");
     const secondManifest = manifest("second-node");
     assert.notEqual(
-      semanticDigest(firstManifest.entries, [], firstManifest.ignoreDigest),
-      semanticDigest(secondManifest.entries, [], secondManifest.ignoreDigest),
+      semanticDigest(firstManifest.entries, firstManifest.ignoreDigest),
+      semanticDigest(secondManifest.entries, secondManifest.ignoreDigest),
     );
     assert.equal(
       hubAiWorkspaceDigest(firstManifest, hubObjects, "fixture"),

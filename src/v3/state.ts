@@ -252,6 +252,37 @@ export class LocalState implements Disposable {
     this.database.prepare("DELETE FROM journals WHERE journal_id = ?").run(id);
   }
 
+  /** Partition recovery intent before any filesystem operation can resume. */
+  public rewriteJournals(input: {
+    readonly upsert: readonly {
+      readonly id: string;
+      readonly kind: string;
+      readonly value: unknown;
+      readonly status: string;
+    }[];
+    readonly remove: readonly string[];
+  }): void {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of input.remove) this.completeJournal(id);
+      for (const entry of input.upsert)
+        this.putJournal(entry.id, entry.kind, entry.value, entry.status);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  public heldApplyCount(): number {
+    const row = this.database
+      .prepare(
+        "SELECT COUNT(*) AS count FROM journals WHERE kind='held-snapshot-apply'",
+      )
+      .get() as { readonly count: number };
+    return Number(row.count);
+  }
+
   public journals(): readonly {
     readonly id: string;
     readonly kind: string;

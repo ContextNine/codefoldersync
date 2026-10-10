@@ -351,10 +351,9 @@ async function committedNamespace(
     folderId: config.folderId,
     ignoreDigest: config.ignoreDigest,
     entries: catalog,
-    gitBoundaries: [],
     repositories: [context],
     createdAt: new Date().toISOString(),
-    digest: semanticDigest(catalog, [], config.ignoreDigest, [context]),
+    digest: semanticDigest(catalog, config.ignoreDigest, [context]),
   };
   validateNamespaceManifest(manifest);
   return manifest;

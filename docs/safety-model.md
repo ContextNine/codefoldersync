@@ -17,9 +17,9 @@ V3 does not report convergence after silently discarding an observed stable byte
 
 ## Git boundary
 
-Every discovered `.git` is classified. A physical contained directory is supported. A contained indirection or submodule target is supported with dependency-ordered materialization. Malformed, cyclic, missing, linked-worktree, or external Git directories stop the scan.
+Every discovered `.git` remains local. Physical contained directories and contained metadata indirections are excluded from working-file capture and apply. External or unsafe metadata targets fail closed. Selected-files mode does not need an idle index or committed HEAD.
 
-Git metadata never becomes unrelated leaf events. It is captured as one immutable tree, staged, verified, swapped, and verified again. Codex's persistent zero-byte `.git/codex-repo-sync.lock` is machine-local coordination state and is excluded from that tree. Any other `*.lock` inside Git metadata stops capture because it may identify an active mutation.
+Default-branch mode requires matching identity, branch, and HEAD. Git locks or unavailable contexts suspend the affected repository and dependent nested scopes. Codex's machine-local `codex-repo-sync.lock` does not identify a Git mutation. Apply leases hold nonce-qualified index/HEAD/ref locks and guard enclosing checkouts. Context changes during interrupted recovery retain the old transaction privately while eligible siblings resume; no metadata tree is captured, staged, or swapped.
 
 ## Adoption boundary
 
@@ -33,7 +33,7 @@ SSH provides host transport security. Application signatures additionally limit 
 
 ## Normal conflicts
 
-The first accepted causal state remains canonical. Concurrent losing leaf content becomes a deterministic grep-friendly sibling. Delete conflicts retain explicit evidence. Git conflicts retain their manifest. Timestamps never choose a winner.
+The first accepted causal state remains canonical. Concurrent losing leaf content becomes a deterministic grep-friendly sibling. Delete conflicts retain explicit evidence. Old-context queued events and interrupted applies retain their immutable versions privately. Timestamps never choose a winner.
 
 ## Test and production boundary
 

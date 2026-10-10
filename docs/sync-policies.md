@@ -34,11 +34,19 @@ Queued events from a previous HEAD move atomically into `held_outbox`. Their exa
 codefoldersync recover-held <event-id> --path path/to/file
 ```
 
-The command verifies the retained event and writes an absent destination under private state. It reports only the event ID and destination. ENV values never enter output.
+The command verifies the retained event and writes an absent destination under private state. It also accepts a retained interrupted-apply ID. For that ID, `--before` recovers the pre-apply leaf instead of the accepted version. It reports only the ID and destination. ENV values never enter output.
 
 Capture and publication recheck Git context after asynchronous object transfer and immediately before hub acceptance. A checkout during upload leaves the event queued, not accepted in the wrong context.
 
-Development gates still open: isolating a suspended repository inside an already interrupted multi-repository apply, and removing obsolete Git-mirroring implementation. A pending apply currently stops recovery for the folder if any of its active or enclosing contexts changed. Do not activate this development build on a daily-driver workspace before those gates and real-folder acceptance pass.
+## Interrupted repository applies
+
+Recovery checks each saved active and enclosing context independently. A proved branch, HEAD, or identity change atomically retains the original transaction and affected move intents as private recovery records. Those records never replay into the changed checkout. Eligible siblings resume their accepted projection with the original staging and recovery paths. Status reports retained applies, and `recover-held <apply-id> --path <leaf> [--before]` copies either recorded version privately.
+
+An unavailable or locked context stays pending instead of becoming permanently retained. Eligible siblings can finish while its projection waits; removing the lock permits that remaining projection to resume. Partial acceptance preserves the waiting repository's baseline and does not rewind the global hub cursor. Git leases and containment checks still run before live writes.
+
+The product has no Git-boundary capture, materialization, or mutation format. Changed contracts require fresh configurations and hubs. Historical backup archives and their complete Git recovery checks remain separate from synchronization.
+
+Do not activate this development build on a daily-driver workspace before final-candidate and real-folder acceptance pass.
 
 ## Selected files only
 
@@ -70,6 +78,6 @@ Plaintext ENV transfer needs a separate custody decision for the exact workspace
 
 ## Acceptance
 
-The policy integration lane exercises ENV sharing across independently selected branches, retained code/index/HEAD, nested ENV creation and deletion beside local-only files, and visible concurrent-value recovery. Its default-branch scenario covers matching contexts, independently paused nested roots, reverse sibling publication, an unborn/locked sibling, native checkout exclusion, mixed-context queues, atomic saves, checkout during upload, and real SIGKILL/restart with a partial apply. It also checks an independent Git fast-forward followed by dirty edit/deletion transfer, exact binary and symlink materialization, unchanged staging, and private recovery of the old queued version. Existing grouped product integration scenarios cover adoption, durable apply, structural changes, corruption, and conflicts with independent Git state.
+The policy integration lane exercises ENV sharing across independently selected branches, retained code/index/HEAD, nested ENV creation and deletion beside local-only files, and visible concurrent-value recovery. Its default-branch scenario covers matching contexts, independently paused nested roots, reverse sibling publication, an unborn/locked sibling, native checkout exclusion, mixed-context queues, atomic saves, checkout during upload, and real SIGKILL/restart with a partial apply. It changes a nested checkout after a killed apply, verifies sibling recovery and unchanged staged private work, and recovers both recorded versions privately. A separate interrupted projection waits through a Git lock and resumes after its removal. The same group checks an independent Git fast-forward followed by dirty edit/deletion transfer, exact binary and symlink materialization, unchanged staging, private recovery of an old queued version, and new nested repository enrollment. Existing grouped product integration scenarios cover adoption, durable apply, structural changes, corruption, and conflicts with independent Git state.
 
 These focused cases do not prove release acceptance. Full archived Code trees, native-machine checks, and real-folder stress results are separate evidence in the rollout plan. Passing them requires the final candidate, not an older build's checkpoint.

@@ -1129,7 +1129,6 @@ scenario(
         "after-moves-placed",
         "after-directories",
         "after-leaves",
-        "after-git",
       ];
       for (const [index, point] of faultPoints.entries()) {
         const nextMovingPath = join(authority.root, `moving-apply-${index}`);

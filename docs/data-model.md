@@ -44,7 +44,7 @@ Objects are stored in SQLite `WITHOUT ROWID` tables with WAL and full synchronou
 
 ## Local Git context
 
-Git metadata stays local. The signed policy validator rejects a nonempty Git-boundary list. Default-branch snapshots record each repository's path, root-commit identity hash, branch, and exact HEAD. Selected-file discovery needs only contained metadata exclusions and does not require a committed or idle checkout. External Git targets remain unsupported. See [synchronization policies](sync-policies.md) for the current development gates.
+Git metadata stays local. Snapshots have no Git-boundary list or Git-state mutation, and old Git-boundary snapshots are rejected. Default-branch snapshots record each repository's path, root-commit identity hash, branch, and exact HEAD. Selected-file discovery needs only contained metadata exclusions and does not require a committed or idle checkout. External Git targets remain unsupported. See [synchronization policies](sync-policies.md).
 
 ## Local SQLite state
 
@@ -64,7 +64,9 @@ With independently suspended repositories, this file retains their previous acce
 
 After a verified Git-context advance, a temporary committed-tree baseline supplies stable node IDs while the actual checkout is captured again. The accepted baseline advances only through normal acceptance. Old-context queued events remain in `held_outbox`; their objects are not garbage-collected or inserted into the new checkout.
 
-A normal apply journal stores current/desired eligible manifests, the complete hub event's accepted digest and sequence, the recovery root, and its repository scope. Scope names all discovered/enrolled roots, eligible contexts, suspended reasons, and enclosing checkout guards. Recovery validates that journal scope and proves the complete accepted digest against hub history before applying its eligible projection.
+A normal apply journal stores current/desired eligible manifests, the complete hub event's accepted digest and sequence, the recovery and move-staging roots, and its repository scope. Scope names all discovered/enrolled roots, eligible contexts, suspended reasons, and enclosing checkout guards. Child move journals name their apply ID and affected namespace paths. Recovery validates that journal scope and proves the complete accepted digest against hub history before applying its eligible projection.
+
+Changed contexts retain the original transaction as `held-snapshot-apply` and their move intents as `held-move`. One SQLite transaction writes retained records and narrows or removes the replayable parent. Status reports `heldApplyEntries`. Unknown contexts keep their replayable projection pending; completed siblings leave its baselines intact. Retained records and their immutable objects are not automatically removed.
 
 ## Hub SQLite state
 

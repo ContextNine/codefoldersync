@@ -2,7 +2,6 @@ import { canonicalJson, hashJson } from "../v2/hash.js";
 import { referencedObjects, type ObjectStore } from "./objects.js";
 import type {
   CatalogEntry,
-  GitBoundary,
   NamespaceManifest,
   NamespaceMutation,
 } from "./types.js";
@@ -103,30 +102,6 @@ export function deriveMutations(input: {
       });
   }
 
-  const baseGit = gitByNode(input.base);
-  const nextGit = gitByNode(input.next);
-  for (const nodeId of new Set([...baseGit.keys(), ...nextGit.keys()])) {
-    const before = baseGit.get(nodeId);
-    const after = nextGit.get(nodeId);
-    if (canonicalJson(before) === canonicalJson(after)) continue;
-    mutations.push({
-      ...mutationBase(input, nodeId, undefined),
-      kind: "git-state",
-      path: after?.worktreePath ?? before?.worktreePath ?? "",
-      baseEntryVersion: before === undefined ? null : gitEntryVersion(before),
-      baseContentVersion:
-        before === undefined ? null : gitContentVersion(before),
-      entryVersion: after === undefined ? null : gitEntryVersion(after),
-      contentVersion: after === undefined ? null : gitContentVersion(after),
-      objectIds:
-        after === undefined
-          ? before === undefined
-            ? []
-            : [...referencedObjects(before.manifestId, input.objects)].sort()
-          : [...referencedObjects(after.manifestId, input.objects)].sort(),
-    });
-  }
-
   const baseContexts = new Map(
     input.base?.repositories.map((value) => [value.path, value]) ?? [],
   );
@@ -198,36 +173,4 @@ function entryObjects(
   return entry.manifestId === null
     ? []
     : [...referencedObjects(entry.manifestId, objects)].sort();
-}
-
-function gitByNode(
-  snapshot: NamespaceManifest | null,
-): Map<string, GitBoundary> {
-  if (snapshot === null) return new Map();
-  const entries = new Map(snapshot.entries.map((entry) => [entry.path, entry]));
-  return new Map(
-    snapshot.gitBoundaries.map((boundary) => {
-      const nodeId =
-        boundary.worktreePath === ""
-          ? "$root-git"
-          : entries.get(boundary.worktreePath)?.nodeId;
-      if (nodeId === undefined)
-        throw new Error(
-          `Git boundary has no worktree node: ${boundary.worktreePath}`,
-        );
-      return [`git:${nodeId}`, boundary] as const;
-    }),
-  );
-}
-
-function gitEntryVersion(boundary: GitBoundary): string {
-  return hashJson({
-    worktreePath: boundary.worktreePath,
-    gitPath: boundary.gitPath,
-    kind: boundary.kind,
-  });
-}
-
-function gitContentVersion(boundary: GitBoundary): string {
-  return hashJson({ manifestId: boundary.manifestId });
 }

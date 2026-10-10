@@ -9,7 +9,6 @@ import {
   readFileSync,
   readSync,
   readlinkSync,
-  readdirSync,
   renameSync,
   symlinkSync,
   unlinkSync,
@@ -28,7 +27,6 @@ import {
   type RegularManifest,
   type SymlinkManifest,
   type TreeManifest,
-  type TreeManifestEntry,
 } from "./types.js";
 
 const smallFileCutoff = 64 * 1024;
@@ -109,84 +107,6 @@ export function capturePath(path: string, store: ObjectStore): CaptureResult {
     device: before.dev,
     inode: before.ino,
   };
-}
-
-export function captureTree(
-  root: string,
-  store: ObjectStore,
-): { readonly manifestId: string; readonly objectIds: readonly string[] } {
-  return captureTreeWithIgnoredLocks(root, store, new Set());
-}
-
-/** Captures one complete Git boundary while excluding Codex's persistent,
- * machine-local repository coordination lock. All other locks still stop the
- * scan because they can indicate an in-progress Git mutation. */
-export function captureGitTree(
-  root: string,
-  store: ObjectStore,
-): { readonly manifestId: string; readonly objectIds: readonly string[] } {
-  return captureTreeWithIgnoredLocks(
-    root,
-    store,
-    new Set(["codex-repo-sync.lock"]),
-  );
-}
-
-function captureTreeWithIgnoredLocks(
-  root: string,
-  store: ObjectStore,
-  ignoredLocks: ReadonlySet<string>,
-): { readonly manifestId: string; readonly objectIds: readonly string[] } {
-  const objectIds = new Set<string>();
-  const rootDevice = lstatSync(root).dev;
-  const walk = (path: string): string => {
-    const entries: TreeManifestEntry[] = [];
-    for (const entry of readdirSync(path, { withFileTypes: true }).sort(
-      (left, right) => left.name.localeCompare(right.name, "en"),
-    )) {
-      if (entry.name.endsWith(".lock") && ignoredLocks.has(entry.name))
-        continue;
-      if (entry.name.endsWith(".lock"))
-        throw new Error(`Transient Git lock cannot be captured: ${entry.name}`);
-      const target = join(path, entry.name);
-      const stat = lstatSync(target);
-      if (stat.dev !== rootDevice)
-        throw new Error(
-          `Nested mount is unsupported in Git metadata: ${target}`,
-        );
-      if (stat.isDirectory() && !stat.isSymbolicLink()) {
-        entries.push({
-          name: entry.name,
-          kind: "directory",
-          manifestId: walk(target),
-        });
-        continue;
-      }
-      const captured = capturePath(target, store);
-      if (captured.kind === "directory")
-        throw new Error(`Unexpected tree directory: ${target}`);
-      for (const id of captured.objectIds) objectIds.add(id);
-      entries.push({
-        name: entry.name,
-        kind: captured.kind,
-        manifestId: captured.manifestId,
-      });
-    }
-    const digest = hashJson(
-      entries.map(({ name, kind, manifestId }) => ({ name, kind, manifestId })),
-    );
-    const manifest: TreeManifest = {
-      schemaVersion,
-      type: "tree",
-      entries,
-      digest,
-    };
-    const id = store.put(Buffer.from(canonicalJson(manifest), "utf8"));
-    objectIds.add(id);
-    return id;
-  };
-  const manifestId = walk(root);
-  return { manifestId, objectIds: [...objectIds] };
 }
 
 export function parseManifest(bytes: Buffer): ContentManifest {
