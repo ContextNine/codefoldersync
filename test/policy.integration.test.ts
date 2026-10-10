@@ -29,6 +29,7 @@ import {
   verifyFullV3,
 } from "../src/v3/engine.js";
 import { plaintextEnvPolicy } from "../src/v3/policy.js";
+import { LocalState } from "../src/v3/state.js";
 import type { ProductConfig, SyncPolicy } from "../src/v3/types.js";
 
 function git(root: string, ...args: string[]): string {
@@ -57,6 +58,28 @@ function synced(result: Awaited<ReturnType<typeof syncFolderV3>>): void {
   );
 }
 
+function crashApplying(config: ProductConfig): void {
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `
+    import { loadConfig } from './src/v3/config.ts';
+    import { syncFolderV3 } from './src/v3/engine.ts';
+    await syncFolderV3(loadConfig(process.argv[1]), { fault(point) {
+      if (point === 'after-apply-journal') process.kill(process.pid, 'SIGKILL');
+    }});
+  `,
+      join(config.root, ".codefoldersync", "config.json"),
+    ],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  assert.equal(child.signal, "SIGKILL", child.stderr);
+}
+
 async function withPolicyFleet(
   syncPolicy: SyncPolicy,
   action: (source: ProductConfig, target: ProductConfig) => Promise<void>,
@@ -73,6 +96,27 @@ async function withPolicyFleet(
     writeFileSync(join(sourceRoot, ".gitignore"), ".env*\n");
     git(sourceRoot, "add", ".");
     git(sourceRoot, "commit", "-m", "fixture");
+    if (syncPolicy.mode === "default-branch") {
+      writeFileSync(join(sourceRoot, ".gitignore"), ".env*\npackages/\n");
+      git(sourceRoot, "add", ".gitignore");
+      git(sourceRoot, "commit", "-m", "independent nested repositories");
+      for (const path of [
+        "packages/paused",
+        "packages/paused/inner",
+        "packages/healthy",
+      ]) {
+        const root = join(sourceRoot, path);
+        mkdirSync(root, { recursive: true });
+        git(root, "init", "-b", "master");
+        writeFileSync(
+          join(root, "source.ts"),
+          `export const name = ${JSON.stringify(path)};\n`,
+        );
+        writeFileSync(join(root, ".gitignore"), "inner/\n");
+        git(root, "add", ".");
+        git(root, "commit", "-m", `fixture ${path}`);
+      }
+    }
     writeFileSync(join(sourceRoot, ".env"), "SYNTHETIC_FIXTURE=initial\n");
     cpSync(sourceRoot, targetRoot, { recursive: true });
     let source = (
@@ -323,6 +367,170 @@ test("default-branch peers transfer edits only within a matching Git context", a
       git(target.root, "switch", "-c", "post-recovery-checkout");
       git(target.root, "switch", "master");
 
+      const pausedRoot = join(target.root, "packages", "paused");
+      const healthyPath = "packages/healthy/source.ts";
+      const innerPath = "packages/paused/inner/source.ts";
+      git(pausedRoot, "switch", "-c", "private-feature");
+      writeFileSync(
+        join(pausedRoot, "source.ts"),
+        "export const privateFeature = true;\n",
+      );
+      git(pausedRoot, "add", "source.ts");
+      const privateIndex = readFileSync(join(pausedRoot, ".git", "index"));
+      writeFileSync(
+        join(source.root, "packages", "paused", "source.ts"),
+        "export const pausedSourceEdit = true;\n",
+      );
+      writeFileSync(
+        join(source.root, healthyPath),
+        "export const healthySourceEdit = true;\n",
+      );
+      writeFileSync(
+        join(source.root, innerPath),
+        "export const innerSourceEdit = true;\n",
+      );
+      synced(await syncFolderV3(source));
+      let attemptedParentCheckout = false;
+      const partial = await syncFolderV3(target, {
+        fault(point) {
+          if (point !== "after-apply-journal") return;
+          attemptedParentCheckout = true;
+          const checkout = spawnSync(
+            "git",
+            ["-C", pausedRoot, "switch", "master"],
+            { encoding: "utf8" },
+          );
+          assert.notEqual(checkout.status, 0);
+        },
+      });
+      assert.equal(partial.status, "inconclusive", JSON.stringify(partial));
+      assert.equal(partial.applied, true, JSON.stringify(partial));
+      assert.equal(attemptedParentCheckout, true);
+      assert.equal(
+        readFileSync(join(target.root, healthyPath), "utf8"),
+        "export const healthySourceEdit = true;\n",
+      );
+      assert.equal(
+        readFileSync(join(target.root, innerPath), "utf8"),
+        "export const innerSourceEdit = true;\n",
+      );
+      assert.equal(
+        readFileSync(join(pausedRoot, "source.ts"), "utf8"),
+        "export const privateFeature = true;\n",
+      );
+      assert.deepEqual(
+        readFileSync(join(pausedRoot, ".git", "index")),
+        privateIndex,
+      );
+      assert.equal(
+        git(pausedRoot, "symbolic-ref", "--short", "HEAD"),
+        "private-feature",
+      );
+      assert.equal((await verifyFullV3(target)).status, "inconclusive");
+      writeFileSync(
+        join(source.root, innerPath),
+        "export const innerRestartEdit = true;\n",
+      );
+      synced(await syncFolderV3(source));
+      crashApplying(target);
+      assert.equal((await syncFolderV3(target)).status, "inconclusive");
+      assert.equal(
+        readFileSync(join(target.root, innerPath), "utf8"),
+        "export const innerRestartEdit = true;\n",
+      );
+      assert.deepEqual(
+        readFileSync(join(pausedRoot, ".git", "index")),
+        privateIndex,
+      );
+      writeFileSync(
+        join(target.root, healthyPath),
+        "export const healthyTargetEdit = true;\n",
+      );
+      assert.equal((await syncFolderV3(target)).published, true);
+      synced(await syncFolderV3(source));
+      assert.equal(
+        readFileSync(join(source.root, healthyPath), "utf8"),
+        "export const healthyTargetEdit = true;\n",
+      );
+      assert.equal(
+        readFileSync(
+          join(source.root, "packages", "paused", "source.ts"),
+          "utf8",
+        ),
+        "export const pausedSourceEdit = true;\n",
+      );
+      git(pausedRoot, "restore", "--staged", "source.ts");
+      git(pausedRoot, "restore", "source.ts");
+      git(pausedRoot, "switch", "master");
+      synced(await syncFolderV3(target));
+      assert.equal(
+        readFileSync(join(pausedRoot, "source.ts"), "utf8"),
+        "export const pausedSourceEdit = true;\n",
+      );
+
+      // Stop after durable queueing, then change one repository's branch.
+      writeFileSync(
+        join(pausedRoot, "source.ts"),
+        "export const queuedPausedEdit = true;\n",
+      );
+      writeFileSync(
+        join(target.root, healthyPath),
+        "export const queuedHealthyEdit = true;\n",
+      );
+      const interrupted = await syncFolderV3(target, {
+        fault(point) {
+          if (point === "after-outbox")
+            throw new Error("Synthetic transport outage after durable queue");
+        },
+      });
+      assert.equal(interrupted.status, "inconclusive");
+      {
+        using state = new LocalState(target);
+        assert.equal(state.outbox().length, 1);
+      }
+      git(pausedRoot, "switch", "private-feature");
+      writeFileSync(
+        join(target.root, healthyPath),
+        "export const newestHealthyEdit = true;\n",
+      );
+      const queuedPartial = await syncFolderV3(target);
+      assert.equal(
+        queuedPartial.published,
+        true,
+        JSON.stringify(queuedPartial),
+      );
+      {
+        using state = new LocalState(target);
+        assert.equal(state.outbox().length, 1);
+      }
+      synced(await syncFolderV3(source));
+      assert.equal(
+        readFileSync(join(source.root, healthyPath), "utf8"),
+        "export const newestHealthyEdit = true;\n",
+      );
+      assert.equal(
+        readFileSync(join(source.root, "packages/paused/source.ts"), "utf8"),
+        "export const pausedSourceEdit = true;\n",
+      );
+      assert.equal(
+        readFileSync(join(pausedRoot, "source.ts"), "utf8"),
+        "export const queuedPausedEdit = true;\n",
+      );
+      writeFileSync(
+        join(pausedRoot, "source.ts"),
+        "export const pausedSourceEdit = true;\n",
+      );
+      git(pausedRoot, "switch", "master");
+      synced(await syncFolderV3(target));
+      {
+        using state = new LocalState(target);
+        assert.equal(state.outbox().length, 0);
+      }
+      assert.equal(
+        readFileSync(join(target.root, healthyPath), "utf8"),
+        "export const newestHealthyEdit = true;\n",
+      );
+
       git(target.root, "switch", "-c", "feature");
       const featureCode = readFileSync(join(target.root, "source.ts"), "utf8");
       writeFileSync(
@@ -330,7 +538,7 @@ test("default-branch peers transfer edits only within a matching Git context", a
         "export const value = 3;\n",
       );
       synced(await syncFolderV3(source));
-      await assert.rejects(syncFolderV3(target), /default branch.*paused/u);
+      assert.equal((await syncFolderV3(target)).status, "inconclusive");
       assert.equal(
         readFileSync(join(target.root, "source.ts"), "utf8"),
         featureCode,
@@ -346,6 +554,34 @@ test("default-branch peers transfer edits only within a matching Git context", a
         "export const value = 3;\n",
       );
       git(target.root, "add", "source.ts");
+      const scratch = join(target.root, "scratch");
+      mkdirSync(scratch);
+      git(scratch, "init", "-b", "unborn");
+      writeFileSync(join(scratch, ".git", "index.lock"), "synthetic-lock\n");
+      writeFileSync(
+        join(scratch, "local.ts"),
+        "export const localScratch = true;\n",
+      );
+      writeFileSync(
+        join(source.root, healthyPath),
+        "export const healthyBesideUnborn = true;\n",
+      );
+      synced(await syncFolderV3(source));
+      const withUnborn = await syncFolderV3(target);
+      assert.equal(withUnborn.status, "inconclusive");
+      assert.equal(withUnborn.applied, true, JSON.stringify(withUnborn));
+      assert.equal(
+        readFileSync(join(target.root, healthyPath), "utf8"),
+        "export const healthyBesideUnborn = true;\n",
+      );
+      assert.equal(
+        readFileSync(join(scratch, "local.ts"), "utf8"),
+        "export const localScratch = true;\n",
+      );
+      assert.equal(
+        readFileSync(join(scratch, ".git", "index.lock"), "utf8"),
+        "synthetic-lock\n",
+      );
       git(target.root, "commit", "-m", "target advances independently");
       const advancedHead = git(target.root, "rev-parse", "HEAD");
       const paused = await syncFolderV3(target);

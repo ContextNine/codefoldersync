@@ -34,6 +34,8 @@ Any target change after approval causes a new-plan requirement. The authority pe
 
 Normal mode compares three snapshots: accepted local baseline, current local scan, and accepted hub checkpoint.
 
+Default-branch mode first discovers every repository context, then projects those snapshots onto eligible scope. It never captures leaf contents inside a suspended repository. Nested ownership uses the deepest repository root, so an eligible nested checkout remains independent of an off-branch parent. Required parent directories stay in the projection. Publication combines the merged eligible projection with unchanged suspended hub entries; local acceptance combines it with the previous suspended local baseline and observations. A suspended repository is not a deletion and does not advance its local baseline.
+
 - Local equals hub: update observations and cursor only.
 - Local equals baseline: download and apply remote.
 - Hub equals baseline: publish local with a sequence CAS.
@@ -44,6 +46,8 @@ The hub sequence, not timestamps, determines the canonical side. Checkpoint publ
 ## Apply ordering
 
 Normal apply force-revalidates that the local scan is still current. Moving roots first stage deep to shallow, then occupy destinations shallow to deep so rename cycles cannot overwrite one another. Bulk subtree moves require every physical entry to be in scope. Otherwise only selected contents move to unique recovery, leaving local-only siblings and Git metadata in place. Desired directories materialize shallow to deep, followed by leaves. Default-branch apply rechecks repository context before touching live files. The accepted snapshot and any normal conflicts publish atomically.
+
+A scoped apply journal records its eligible current/desired projections, suspended-root scope, enclosing Git guards, and the digest of the complete accepted hub event. Recovery proves that complete digest against hub history before applying the projection. It does not claim the projection itself was a whole hub checkpoint. Capture rechecks Git contexts after hashing, and apply leases guard enclosing checkouts as well as directly eligible repositories.
 
 Existing bytes are never unlinked as the first destructive action. Cross-filesystem recovery is rejected during setup.
 

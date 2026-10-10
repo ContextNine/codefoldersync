@@ -13,6 +13,8 @@ import {
 import { normalizeRelativePath, portableName } from "./paths.js";
 import {
   inspectRepositoryContext,
+  assertMatchingRepositoryContext,
+  assertStableRepositoryContext,
   policyIncludes,
   policyIncludesDirectory,
   repositoryMetadata,
@@ -31,7 +33,29 @@ export interface ScanResult {
   readonly objectIds: readonly string[];
   readonly reusedFiles: number;
   readonly capturedFiles: number;
+  readonly scope: RepositoryScope | null;
 }
+
+export interface RepositoryScope {
+  readonly paths: readonly string[];
+  readonly active: readonly RepositoryContext[];
+  readonly guards: readonly RepositoryContext[];
+  readonly paused: readonly {
+    readonly path: string;
+    readonly reason: string;
+  }[];
+}
+
+export interface RepositoryScanOptions {
+  readonly accepted: NamespaceManifest;
+  readonly baseline: NamespaceManifest | null;
+  readonly scope?: RepositoryScope;
+}
+
+const scopeLookups = new WeakMap<
+  RepositoryScope,
+  { readonly paths: readonly string[]; readonly active: ReadonlySet<string> }
+>();
 
 export function scanNamespace(
   config: ProductConfig,
@@ -40,6 +64,7 @@ export function scanNamespace(
   baseline: readonly CatalogEntry[] = [],
   forceHash = false,
   trustBaselinePaths = false,
+  scoped?: RepositoryScanOptions,
 ): ScanResult {
   if (ignore.digest !== config.ignoreDigest)
     throw new Error(
@@ -76,16 +101,28 @@ export function scanNamespace(
   let capturedFiles = 0;
   const metadataPaths = new Set<string>();
   const contexts = new Map<string, RepositoryContext>();
+  const unavailable = new Map<string, string>();
   const discover = (directory: string, relativeDirectory: string): void => {
     if (existsSync(join(directory, ".git"))) {
       for (const path of repositoryMetadata(root, relativeDirectory)
         .metadataPaths)
         metadataPaths.add(path);
-      if (config.syncPolicy.mode === "default-branch")
-        contexts.set(
-          relativeDirectory,
-          inspectRepositoryContext(root, relativeDirectory),
-        );
+      if (config.syncPolicy.mode === "default-branch") {
+        try {
+          contexts.set(
+            relativeDirectory,
+            inspectRepositoryContext(root, relativeDirectory),
+          );
+        } catch (error) {
+          if (scoped === undefined) throw error;
+          unavailable.set(
+            relativeDirectory,
+            error instanceof Error
+              ? error.message
+              : "Repository context is unavailable",
+          );
+        }
+      }
     }
     for (const child of readdirSync(directory, { withFileTypes: true })) {
       if (
@@ -105,9 +142,18 @@ export function scanNamespace(
     }
   };
   discover(root, "");
+  const scope: RepositoryScope | null =
+    scoped === undefined
+      ? null
+      : (scoped.scope ??
+        repositoryScope(config, contexts, unavailable, scoped));
+  const eligibleContexts =
+    scope === null
+      ? contexts
+      : new Map(scope.active.map((value) => [value.path, value]));
 
   const walk = (directory: string, relativeDirectory: string) => {
-    const context = contexts.get(relativeDirectory);
+    const context = eligibleContexts.get(relativeDirectory);
     if (context !== undefined) {
       if (config.syncPolicy.mode === "default-branch") {
         if (
@@ -135,6 +181,15 @@ export function scanNamespace(
       const directoryKind = stat.isDirectory() && !stat.isSymbolicLink();
       if (ignore.ignores(path, directoryKind)) continue;
       if (directoryEntry.name === ".git") continue;
+      if (!directoryKind && scope !== null && !scopeIncludes(scope, path))
+        continue;
+      if (
+        directoryKind &&
+        scope !== null &&
+        !scopeIncludes(scope, path) &&
+        !scope.active.some((value) => value.path.startsWith(`${path}/`))
+      )
+        continue;
       if (!directoryKind && !policyIncludes(config.syncPolicy, path)) continue;
       const alias = portableName(directoryEntry.name);
       if (names.has(alias))
@@ -229,6 +284,7 @@ export function scanNamespace(
       entry.kind !== "directory" ||
       includedParents.has(entry.path) ||
       (policyIncludesDirectory(selectedPolicy, entry.path) &&
+        (scope === null || scopeIncludes(scope, entry.path)) &&
         (readdirSync(join(root, entry.path)).length === 0 ||
           logicalEmptyDirectories.has(entry.path))),
   );
@@ -239,6 +295,18 @@ export function scanNamespace(
     left.worktreePath.localeCompare(right.worktreePath, "en"),
   );
   repositories.sort((left, right) => left.path.localeCompare(right.path, "en"));
+  // A checkout during capture invalidates the proposal, even if its bytes hashed.
+  for (const context of repositories)
+    assertMatchingRepositoryContext(
+      config.syncPolicy,
+      inspectRepositoryContext(root, context.path),
+      context,
+    );
+  for (const context of scope?.guards ?? [])
+    assertStableRepositoryContext(
+      inspectRepositoryContext(root, context.path),
+      context,
+    );
   const digest = semanticDigest(
     includedEntries,
     gitBoundaries,
@@ -259,7 +327,180 @@ export function scanNamespace(
     objectIds: [...objectIds],
     reusedFiles,
     capturedFiles,
+    scope,
   };
+}
+
+function repositoryScope(
+  config: ProductConfig,
+  contexts: ReadonlyMap<string, RepositoryContext>,
+  unavailable: ReadonlyMap<string, string>,
+  options: RepositoryScanOptions,
+): RepositoryScope {
+  const accepted = new Map(
+    options.accepted.repositories.map((value) => [value.path, value]),
+  );
+  const baseline = new Map(
+    options.baseline?.repositories.map((value) => [value.path, value]) ?? [],
+  );
+  const paths = [
+    ...new Set([
+      ...contexts.keys(),
+      ...unavailable.keys(),
+      ...accepted.keys(),
+      ...baseline.keys(),
+    ]),
+  ].sort();
+  const active: RepositoryContext[] = [];
+  const paused: { path: string; reason: string }[] = [];
+  for (const path of paths) {
+    const local = contexts.get(path);
+    const remote = accepted.get(path);
+    try {
+      if (local === undefined)
+        throw new Error(
+          unavailable.get(path) ??
+            "Repository is missing locally; synchronization is paused",
+        );
+      if (remote === undefined)
+        throw new Error(
+          "Repository is not enrolled in the accepted context; synchronization is paused",
+        );
+      assertMatchingRepositoryContext(config.syncPolicy, local, remote);
+      const previous = baseline.get(path);
+      if (previous === undefined)
+        throw new Error(
+          "Repository has no local context baseline; synchronization is paused",
+        );
+      assertMatchingRepositoryContext(config.syncPolicy, local, previous);
+      active.push(local);
+    } catch (error) {
+      paused.push({
+        path,
+        reason:
+          error instanceof Error
+            ? error.message
+            : "Repository synchronization is paused",
+      });
+    }
+  }
+  const eligible = active.filter((context) => {
+    const unavailableParent = paths.find(
+      (parent) =>
+        parent !== context.path &&
+        (parent === "" || context.path.startsWith(`${parent}/`)) &&
+        !contexts.has(parent),
+    );
+    if (unavailableParent === undefined) return true;
+    paused.push({
+      path: context.path,
+      reason:
+        "An enclosing repository has unavailable or mutating Git state; synchronization is paused",
+    });
+    return false;
+  });
+  const guards = [...contexts.values()].filter((context) =>
+    eligible.some(
+      (child) =>
+        context.path !== child.path &&
+        (context.path === "" || child.path.startsWith(`${context.path}/`)),
+    ),
+  );
+  return { paths, active: eligible, guards, paused };
+}
+
+/** A nested repository owns its paths independently of its enclosing checkout. */
+export function scopeIncludes(scope: RepositoryScope, path: string): boolean {
+  let lookup = scopeLookups.get(scope);
+  if (lookup === undefined) {
+    lookup = {
+      paths: [...scope.paths].sort((left, right) => right.length - left.length),
+      active: new Set(scope.active.map((value) => value.path)),
+    };
+    scopeLookups.set(scope, lookup);
+  }
+  const owner = lookup.paths.find(
+    (root) => root === "" || path === root || path.startsWith(`${root}/`),
+  );
+  return owner === undefined || lookup.active.has(owner);
+}
+
+export function projectNamespace(
+  manifest: NamespaceManifest,
+  scope: RepositoryScope,
+): NamespaceManifest {
+  const selected = manifest.entries.filter((entry) =>
+    scopeIncludes(scope, entry.path),
+  );
+  const entries = retainParents(selected, manifest.entries);
+  const repositories = manifest.repositories.filter((value) =>
+    scope.active.some((active) => active.path === value.path),
+  );
+  return {
+    ...manifest,
+    entries,
+    repositories,
+    digest: semanticDigest(entries, [], manifest.ignoreDigest, repositories),
+  };
+}
+
+/** Keep suspended data from the reference; never turn an omitted repo into deletes. */
+export function combineScopedNamespace(
+  active: NamespaceManifest,
+  reference: NamespaceManifest,
+  scope: RepositoryScope,
+): NamespaceManifest {
+  const activeEntries = active.entries.filter((entry) =>
+    scopeIncludes(scope, entry.path),
+  );
+  const held = reference.entries.filter(
+    (entry) => !scopeIncludes(scope, entry.path),
+  );
+  const entries = retainParents(
+    [...activeEntries, ...held],
+    [...reference.entries, ...active.entries],
+  );
+  const repositories = [
+    ...active.repositories,
+    ...reference.repositories.filter(
+      (value) => !scope.active.some((active) => active.path === value.path),
+    ),
+  ].sort((left, right) => left.path.localeCompare(right.path, "en"));
+  const result = {
+    ...active,
+    entries,
+    repositories,
+    digest: semanticDigest(entries, [], active.ignoreDigest, repositories),
+  };
+  validateNamespaceManifest(result);
+  return result;
+}
+
+function retainParents(
+  selected: readonly CatalogEntry[],
+  candidates: readonly CatalogEntry[],
+): readonly CatalogEntry[] {
+  const entries = new Map(selected.map((entry) => [entry.path, entry]));
+  const byPath = new Map(candidates.map((entry) => [entry.path, entry]));
+  for (const entry of selected) {
+    let parent = entry.parentPath;
+    while (parent !== null) {
+      const value = entries.get(parent) ?? byPath.get(parent);
+      if (value === undefined || value.kind !== "directory")
+        throw new Error("Scoped namespace is missing a physical parent");
+      entries.set(parent, value);
+      parent = value.parentPath;
+    }
+  }
+  return [...entries.values()]
+    .map((entry) => ({
+      ...entry,
+      parentNodeId:
+        entry.parentPath === null
+          ? "$root"
+          : (entries.get(entry.parentPath)?.nodeId ?? "$missing"),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path, "en"));
 }
 
 export function semanticDigest(

@@ -18,15 +18,18 @@ import {
 } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { canonicalJson, hashJson, hashText } from "../v2/hash.js";
+import { assertHash, canonicalJson, hashJson, hashText } from "../v2/hash.js";
 import { compileIgnore, defaultIgnore } from "./ignore.js";
 import {
   manifestObjectIds,
+  combineScopedNamespace,
+  projectNamespace,
   scanNamespace,
   semanticDigest,
   validateNamespaceManifest,
   validateNamespacePolicy,
   type ScanResult,
+  type RepositoryScope,
 } from "./catalog.js";
 import {
   assertAuthority,
@@ -51,7 +54,12 @@ import {
   parseManifest,
   referencedObjects,
 } from "./objects.js";
-import { conflictPath, portableName, safeTarget } from "./paths.js";
+import {
+  conflictPath,
+  normalizeRelativePath,
+  portableName,
+  safeTarget,
+} from "./paths.js";
 import { contentVersion, deriveMutations } from "./mutations.js";
 import { LocalState } from "./state.js";
 import { HubTransport } from "./transport.js";
@@ -67,6 +75,7 @@ import {
   type HubCheckpoint,
   type NamespaceManifest,
   type ProductConfig,
+  type RepositoryContext,
   type SignedAdoptionVerification,
   type SignedConflict,
   type SignedSnapshot,
@@ -76,6 +85,7 @@ import {
 } from "./types.js";
 import {
   assertMatchingRepositoryContext,
+  assertStableRepositoryContext,
   inspectRepositoryContext,
   isPlaintextEnvPath,
 } from "./policy.js";
@@ -95,6 +105,7 @@ export interface AdoptionApplyOptions {
 }
 
 export type NormalApplyFaultPoint =
+  | "after-outbox"
   | "after-local-publish"
   | "after-apply-journal"
   | "after-moves-staged"
@@ -419,21 +430,48 @@ export async function verifyFullV3(
   using state = new LocalState(config);
   recoverInterruptedApplies(config, state);
   using objects = new ObjectStore(join(config.stateDir, "objects"));
-  const scanned = scanNamespace(
+  const baseline = loadBaseline(config);
+  let scanned = scanNamespace(
     config,
     objects,
     ensureIgnore(config.root),
     state.catalog(),
     true,
+    false,
+    config.syncPolicy.mode === "default-branch" && baseline !== null
+      ? { accepted: baseline, baseline }
+      : undefined,
   );
   try {
     await using transport = await HubTransport.connectForPeer(config);
     const checkpoint = await transport.checkpoint(config.folderId);
     assertAcceptedConfig(config, checkpoint);
+    if (
+      config.syncPolicy.mode === "default-branch" &&
+      checkpoint.snapshot !== null
+    ) {
+      scanned = scanNamespace(
+        config,
+        objects,
+        ensureIgnore(config.root),
+        state.catalog(),
+        true,
+        false,
+        { accepted: checkpoint.snapshot, baseline },
+      );
+    }
+    const accepted =
+      checkpoint.snapshot === null
+        ? null
+        : scanned.scope === null
+          ? checkpoint.snapshot
+          : projectNamespace(checkpoint.snapshot, scanned.scope);
     const reasons =
-      checkpoint.snapshot?.digest === scanned.manifest.digest
+      accepted?.digest === scanned.manifest.digest
         ? []
         : ["Local semantic manifest differs from the accepted hub checkpoint"];
+    for (const paused of scanned.scope?.paused ?? [])
+      reasons.push(`Repository ${paused.path || "."}: ${paused.reason}`);
     const conflicts = activeConflictCount(
       await transport.conflicts(config.folderId),
     );
@@ -479,18 +517,100 @@ export async function syncFolderV3(
   recoverInterruptedApplies(config, state);
   using objects = new ObjectStore(join(config.stateDir, "objects"));
   const ignore = ensureIgnore(config.root);
-  let local = scanNamespace(config, objects, ignore, state.catalog());
+  let baseline = loadBaseline(config);
+  if (config.syncPolicy.mode === "default-branch" && baseline === null)
+    throw new Error(
+      "Default-branch synchronization requires an adopted context baseline",
+    );
+  let local = scanNamespace(
+    config,
+    objects,
+    ignore,
+    state.catalog(),
+    false,
+    false,
+    config.syncPolicy.mode === "default-branch" && baseline !== null
+      ? { accepted: baseline, baseline }
+      : undefined,
+  );
+  let scope = local.scope;
+  let published = false;
+  let applied = false;
+  let uploaded = 0;
+  let downloaded = 0;
+  const finish = (sequence: number, conflicts = 0): SyncSummary => {
+    const result = summary(
+      config,
+      local,
+      sequence,
+      published,
+      applied,
+      uploaded,
+      downloaded,
+      conflicts,
+    );
+    return scope !== null && scope.paused.length > 0
+      ? {
+          ...result,
+          status: "inconclusive",
+          reasons: scope.paused.map(
+            (value) => `Repository ${value.path || "."}: ${value.reason}`,
+          ),
+        }
+      : result;
+  };
+  const acceptLocal = (
+    canonical: NamespaceManifest,
+    sequence: number,
+  ): void => {
+    const accepted =
+      scope === null
+        ? canonical
+        : combineScopedNamespace(
+            projectNamespace(canonical, scope),
+            baseline ?? canonical,
+            scope,
+          );
+    const catalog =
+      scope === null
+        ? local.manifest.entries
+        : combineScopedNamespace(
+            local.manifest,
+            { ...(baseline ?? canonical), entries: state.catalog() },
+            scope,
+          ).entries;
+    state.replaceCatalog(catalog, sequence);
+    state.acceptBaseline(sequence, canonical.digest);
+    saveBaseline(config, accepted);
+    baseline = accepted;
+  };
   try {
     await using transport = await HubTransport.connectForPeer(config);
     let checkpoint = await transport.checkpoint(config.folderId);
     assertAcceptedConfig(config, checkpoint);
-    if (checkpoint.snapshot !== null)
-      assertRepositoryContexts(config, local.manifest, checkpoint.snapshot);
-    for (const record of state.outbox()) {
-      const pending = record.value as SignedSnapshot;
-      assertRepositoryContexts(config, local.manifest, pending.snapshot);
+    if (checkpoint.snapshot === null)
+      throw new Error("Hub has no source checkpoint");
+    if (config.syncPolicy.mode === "default-branch") {
+      local = scanNamespace(
+        config,
+        objects,
+        ignore,
+        state.catalog(),
+        false,
+        false,
+        { accepted: checkpoint.snapshot, baseline },
+      );
+      scope = local.scope;
     }
-    checkpoint = await resumeOutbox(state, objects, transport, checkpoint);
+    // A mixed-context queue is retained, not replayed into a different checkout.
+    // Eligible siblings can publish a fresh CAS proposal while it stays private.
+    if (scope === null || scope.paused.length === 0) {
+      for (const record of state.outbox()) {
+        const pending = record.value as SignedSnapshot;
+        assertRepositoryContexts(config, local.manifest, pending.snapshot);
+      }
+      checkpoint = await resumeOutbox(state, objects, transport, checkpoint);
+    }
     importPublishedConflicts(
       state,
       await transport.conflicts(config.folderId),
@@ -506,188 +626,150 @@ export async function syncFolderV3(
         local.manifest,
         options,
       )
-    )
-      local = scanNamespace(config, objects, ignore, state.catalog(), true);
-    if (checkpoint.snapshot === null)
-      throw new Error("Hub has no source checkpoint");
-    if (local.manifest.digest === checkpoint.snapshot.digest) {
-      state.replaceCatalog(local.manifest.entries, checkpoint.sequence);
-      state.acceptBaseline(checkpoint.sequence, checkpoint.snapshot.digest);
-      saveBaseline(config, checkpoint.snapshot);
-      return summary(
-        config,
-        local,
-        checkpoint.sequence,
-        false,
-        false,
-        0,
-        0,
-        activeConflictCount(await transport.conflicts(config.folderId)),
-      );
-    }
-    const baseline = loadBaseline(config);
-    if (
-      baseline !== null &&
-      local.manifest.digest === baseline.digest &&
-      checkpoint.snapshot.digest !== baseline.digest
     ) {
-      const downloaded = await fetchSnapshotObjects(
-        checkpoint.snapshot,
-        transport,
-        objects,
-      );
-      const journalId = await applySnapshot(
-        config,
-        state,
-        objects,
-        local.manifest,
-        checkpoint.snapshot,
-        "normal",
-        checkpoint.sequence,
-        options,
-      );
-      const verified = scanNamespace(
+      baseline = loadBaseline(config);
+      local = scanNamespace(
         config,
         objects,
         ignore,
-        checkpoint.snapshot.entries,
+        state.catalog(),
         true,
-        true,
-      );
-      assertDigest(verified.manifest, checkpoint.snapshot);
-      state.replaceCatalog(verified.manifest.entries, checkpoint.sequence);
-      state.acceptBaseline(checkpoint.sequence, checkpoint.snapshot.digest);
-      saveBaseline(config, checkpoint.snapshot);
-      if (journalId !== null) state.completeJournal(journalId);
-      return summary(
-        config,
-        verified,
-        checkpoint.sequence,
         false,
-        true,
-        0,
-        downloaded,
+        scope === null
+          ? undefined
+          : { accepted: checkpoint.snapshot!, baseline, scope },
+      );
+    }
+    if (checkpoint.snapshot === null)
+      throw new Error("Hub has no source checkpoint");
+    let remote =
+      scope === null
+        ? checkpoint.snapshot
+        : projectNamespace(checkpoint.snapshot, scope);
+    assertRepositoryContexts(config, local.manifest, remote, scope);
+    if (local.manifest.digest === remote.digest) {
+      acceptLocal(checkpoint.snapshot, checkpoint.sequence);
+      return finish(
+        checkpoint.sequence,
         activeConflictCount(await transport.conflicts(config.folderId)),
       );
     }
+    const base =
+      baseline === null
+        ? null
+        : scope === null
+          ? baseline
+          : projectNamespace(baseline, scope);
+    downloaded += await fetchSnapshotObjects(remote, transport, objects);
     let desired = local.manifest;
     let conflicts: ConflictRecord[] = [];
-    if (
-      baseline !== null &&
-      checkpoint.snapshot.digest !== baseline.digest &&
-      local.manifest.digest !== baseline.digest
-    ) {
-      await fetchSnapshotObjects(checkpoint.snapshot, transport, objects);
+    if (base !== null && local.manifest.digest === base.digest)
+      desired = remote;
+    else if (base !== null && remote.digest !== base.digest) {
       const merged = mergeSnapshots(
         config,
-        baseline,
+        base,
         local.manifest,
-        checkpoint.snapshot,
+        remote,
         objects,
       );
       desired = merged.manifest;
       conflicts = merged.conflicts;
     }
-    desired = reattachRestoredNodes(desired, checkpoint.snapshot, state);
-    assertRepositoryContexts(config, local.manifest, desired);
-    const required = new Set(manifestObjectIds(desired, objects));
-    for (const conflict of conflicts)
-      if (conflict.manifestId !== null)
-        for (const id of referencedObjects(conflict.manifestId, objects))
-          required.add(id);
-    const published = await publishDurably(
-      state,
-      objects,
-      transport,
-      signedSnapshot(config, state, objects, desired, checkpoint, conflicts),
-      [...required],
-    );
-    for (const conflict of conflicts) state.addConflict(conflict);
-    checkpoint = await transport.checkpoint(config.folderId);
-    if (
-      checkpoint.sequence !== published.sequence ||
-      checkpoint.snapshot === null
-    )
-      throw new Error("Accepted snapshot is unavailable");
-    if (checkpoint.snapshot.digest === local.manifest.digest) {
-      options.fault?.("after-local-publish");
-      const verified = scanNamespace(
-        config,
+    desired = reattachRestoredNodes(desired, remote, state);
+    assertRepositoryContexts(config, local.manifest, desired, scope);
+    if (desired.digest !== remote.digest || conflicts.length > 0) {
+      const proposal =
+        scope === null
+          ? desired
+          : combineScopedNamespace(desired, checkpoint.snapshot, scope);
+      const required = new Set(manifestObjectIds(desired, objects));
+      for (const conflict of conflicts)
+        if (conflict.manifestId !== null)
+          for (const id of referencedObjects(conflict.manifestId, objects))
+            required.add(id);
+      const accepted = await publishDurably(
+        state,
         objects,
-        ignore,
-        checkpoint.snapshot.entries,
-        true,
-        true,
+        transport,
+        signedSnapshot(config, state, objects, proposal, checkpoint, conflicts),
+        [...required],
+        (point) => {
+          if (point === "after-outbox") options.fault?.("after-outbox");
+        },
       );
-      state.replaceCatalog(checkpoint.snapshot.entries, checkpoint.sequence);
-      state.acceptBaseline(checkpoint.sequence, checkpoint.snapshot.digest);
-      saveBaseline(config, checkpoint.snapshot);
-      const conflicts = activeConflictCount(
-        await transport.conflicts(config.folderId),
-      );
-      const accepted = summary(
-        config,
-        verified,
-        checkpoint.sequence,
-        true,
-        false,
-        published.uploaded,
-        0,
-        conflicts,
-      );
-      if (verified.manifest.digest !== checkpoint.snapshot.digest)
-        return {
-          ...accepted,
-          status: "inconclusive",
-          reasons: [
-            "Local namespace changed while its checkpoint was publishing; retry will publish the newer state",
-          ],
-        };
-      return accepted;
+      published = true;
+      uploaded = accepted.uploaded;
+      for (const conflict of conflicts) state.addConflict(conflict);
+      checkpoint = await transport.checkpoint(config.folderId);
+      if (
+        checkpoint.sequence !== accepted.sequence ||
+        checkpoint.snapshot === null
+      )
+        throw new Error("Accepted snapshot is unavailable");
+      remote =
+        scope === null
+          ? checkpoint.snapshot
+          : projectNamespace(checkpoint.snapshot, scope);
     }
-    const downloaded = await fetchSnapshotObjects(
-      checkpoint.snapshot,
-      transport,
-      objects,
-    );
-    const journalId = await applySnapshot(
-      config,
-      state,
-      objects,
-      local.manifest,
-      checkpoint.snapshot,
-      "normal",
-      checkpoint.sequence,
-      options,
-    );
-    const verified = scanNamespace(
+    let journalId: string | null = null;
+    if (remote.digest !== local.manifest.digest) {
+      downloaded += await fetchSnapshotObjects(remote, transport, objects);
+      journalId = await applySnapshot(
+        config,
+        state,
+        objects,
+        local.manifest,
+        remote,
+        "normal",
+        checkpoint.sequence,
+        options,
+        scope,
+        checkpoint.snapshot.digest,
+      );
+      applied = true;
+    } else if (published) options.fault?.("after-local-publish");
+    local = scanNamespace(
       config,
       objects,
       ignore,
-      checkpoint.snapshot.entries,
+      remote.entries,
       true,
       true,
+      scope === null
+        ? undefined
+        : { accepted: checkpoint.snapshot, baseline, scope },
     );
-    assertDigest(verified.manifest, checkpoint.snapshot);
-    state.replaceCatalog(verified.manifest.entries, checkpoint.sequence);
-    state.acceptBaseline(checkpoint.sequence, checkpoint.snapshot.digest);
-    saveBaseline(config, checkpoint.snapshot);
+    if (published && !applied && local.manifest.digest !== remote.digest) {
+      acceptLocal(checkpoint.snapshot, checkpoint.sequence);
+      return {
+        ...finish(
+          checkpoint.sequence,
+          activeConflictCount(await transport.conflicts(config.folderId)),
+        ),
+        status: "inconclusive",
+        reasons: [
+          "Local namespace changed while its checkpoint was publishing; retry will publish the newer state",
+        ],
+      };
+    }
+    assertDigest(local.manifest, remote);
+    acceptLocal(checkpoint.snapshot, checkpoint.sequence);
     if (journalId !== null) state.completeJournal(journalId);
-    return summary(
-      config,
-      verified,
+    return finish(
       checkpoint.sequence,
-      true,
-      true,
-      published.uploaded,
-      downloaded,
       activeConflictCount(await transport.conflicts(config.folderId)),
     );
   } catch (error) {
     return {
-      ...summary(config, local, state.sequence(), false, false, 0, 0),
+      ...finish(state.sequence()),
       status: "inconclusive",
-      reasons: [message(error)],
+      reasons: [
+        ...(scope?.paused.map(
+          (value) => `Repository ${value.path || "."}: ${value.reason}`,
+        ) ?? []),
+        message(error),
+      ],
     };
   }
 }
@@ -1699,6 +1781,8 @@ interface SnapshotApplyJournal {
   readonly current: NamespaceManifest;
   readonly desired: NamespaceManifest;
   readonly recoveryRoot: string;
+  readonly scope: RepositoryScope | null;
+  readonly acceptedDigest: string;
 }
 
 async function resumePendingSnapshotApply(
@@ -1729,7 +1813,7 @@ async function resumePendingSnapshotApply(
     !history.some(
       (event) =>
         Number(event.sequence) === journal.acceptedSequence &&
-        String(event.snapshot_digest) === journal.desired.digest,
+        String(event.snapshot_digest) === journal.acceptedDigest,
     )
   )
     throw new Error("Snapshot apply journal is not an accepted hub event");
@@ -1739,16 +1823,20 @@ async function resumePendingSnapshotApply(
   )
     throw new Error("Hub checkpoint is behind a pending snapshot apply");
   manifestObjectIds(journal.desired, objects);
-  assertResumableSnapshotApply(live, journal.current, journal.desired);
+  const scopedLive =
+    journal.scope === null ? live : projectNamespace(live, journal.scope);
+  assertResumableSnapshotApply(scopedLive, journal.current, journal.desired);
   await applySnapshot(
     config,
     state,
     objects,
-    live,
+    scopedLive,
     journal.desired,
     "normal",
     journal.acceptedSequence,
     options,
+    journal.scope,
+    journal.acceptedDigest,
   );
   const verified = scanNamespace(
     config,
@@ -1757,11 +1845,35 @@ async function resumePendingSnapshotApply(
     journal.desired.entries,
     true,
     true,
+    journal.scope === null
+      ? undefined
+      : {
+          accepted: journal.desired,
+          baseline: journal.current,
+          scope: journal.scope,
+        },
   );
   assertDigest(verified.manifest, journal.desired);
-  state.replaceCatalog(verified.manifest.entries, journal.acceptedSequence);
-  state.acceptBaseline(journal.acceptedSequence, journal.desired.digest);
-  saveBaseline(config, journal.desired);
+  const baseline = loadBaseline(config);
+  if (journal.scope !== null && baseline === null)
+    throw new Error("Scoped recovery has no local baseline");
+  state.replaceCatalog(
+    journal.scope === null
+      ? verified.manifest.entries
+      : combineScopedNamespace(
+          verified.manifest,
+          { ...baseline!, entries: state.catalog() },
+          journal.scope,
+        ).entries,
+    journal.acceptedSequence,
+  );
+  state.acceptBaseline(journal.acceptedSequence, journal.acceptedDigest);
+  saveBaseline(
+    config,
+    journal.scope === null
+      ? journal.desired
+      : combineScopedNamespace(journal.desired, baseline!, journal.scope),
+  );
   state.completeJournal(record.id);
   return true;
 }
@@ -1785,13 +1897,85 @@ function snapshotApplyJournal(value: unknown): SnapshotApplyJournal {
   const desired = input.desired as NamespaceManifest;
   validateNamespaceManifest(current);
   validateNamespaceManifest(desired);
+  assertHash(input.acceptedDigest as string, "Apply journal accepted digest");
+  const scope =
+    input.scope === null ? null : parseApplyScope(input.scope, desired);
   return {
     folderId: input.folderId,
     acceptedSequence: Number(input.acceptedSequence),
     current,
     desired,
     recoveryRoot: resolve(input.recoveryRoot),
+    scope,
+    acceptedDigest: input.acceptedDigest as string,
   };
+}
+
+function parseApplyScope(
+  value: unknown,
+  desired: NamespaceManifest,
+): RepositoryScope {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("paths" in value) ||
+    !Array.isArray(value.paths) ||
+    !("active" in value) ||
+    !("guards" in value) ||
+    !Array.isArray(value.guards) ||
+    !("paused" in value) ||
+    !Array.isArray(value.paused)
+  )
+    throw new Error("Invalid apply repository scope");
+  const paths: string[] = value.paths.map((path: unknown) => {
+    if (typeof path !== "string")
+      throw new Error("Invalid apply repository path");
+    if (path !== "") normalizeRelativePath(path);
+    return path;
+  });
+  const paused = value.paused.map((entry: unknown) => {
+    if (
+      typeof entry !== "object" ||
+      entry === null ||
+      !("path" in entry) ||
+      typeof entry.path !== "string" ||
+      !("reason" in entry) ||
+      typeof entry.reason !== "string"
+    )
+      throw new Error("Invalid paused apply repository");
+    return { path: entry.path, reason: entry.reason };
+  });
+  if (
+    canonicalJson(value.active) !== canonicalJson(desired.repositories) ||
+    new Set(paths).size !== paths.length ||
+    canonicalJson([...paths].sort()) !==
+      canonicalJson(
+        [
+          ...desired.repositories.map((entry) => entry.path),
+          ...paused.map((entry) => entry.path),
+        ].sort(),
+      )
+  )
+    throw new Error("Apply repository scope does not match its manifest");
+  const guards = value.guards as readonly RepositoryContext[];
+  validateNamespaceManifest({
+    ...desired,
+    repositories: guards,
+    digest: semanticDigest(desired.entries, [], desired.ignoreDigest, guards),
+  });
+  if (
+    guards.some(
+      (guard) =>
+        !paths.includes(guard.path) ||
+        !desired.repositories.some(
+          (child) =>
+            child.path !== guard.path &&
+            (guard.path === "" || child.path.startsWith(`${guard.path}/`)),
+        ),
+    )
+  )
+    throw new Error("Apply guard is not an enclosing repository");
+  return { paths, active: desired.repositories, guards, paused };
 }
 
 function assertResumableSnapshotApply(
@@ -1838,10 +2022,12 @@ async function applySnapshot(
   recoveryKind: "adoption" | "normal",
   acceptedSequence = 0,
   options: SyncFolderOptions = {},
+  scope: RepositoryScope | null = null,
+  acceptedDigest = desired.digest,
 ): Promise<string | null> {
   validateNamespacePolicy(desired, config);
-  using gitLease = acquireGitLease(config, current.repositories);
-  assertRepositoryContexts(config, current, desired);
+  using gitLease = acquireGitLease(config, current.repositories, scope?.guards);
+  assertRepositoryContexts(config, current, desired, scope);
   for (const entry of desired.entries) {
     if (entry.kind === "directory") continue;
     const target = safeTarget(config.root, entry.path);
@@ -1875,6 +2061,8 @@ async function applySnapshot(
       current,
       desired,
       recoveryRoot,
+      scope,
+      acceptedDigest,
     });
     options.fault?.("after-apply-journal");
   }
@@ -1885,6 +2073,10 @@ async function applySnapshot(
       ensureIgnore(config.root),
       current.entries,
       true,
+      false,
+      scope === null
+        ? undefined
+        : { accepted: desired, baseline: current, scope },
     );
     if (observed.manifest.digest !== current.digest)
       throw new Error(
@@ -2674,7 +2866,12 @@ function recoverInterruptedApplies(
   for (const journal of state.journals()) {
     if (journal.kind !== "snapshot-apply") continue;
     const pending = snapshotApplyJournal(journal.value);
-    assertRepositoryContexts(config, pending.current, pending.desired);
+    assertRepositoryContexts(
+      config,
+      pending.current,
+      pending.desired,
+      pending.scope,
+    );
   }
   for (const journal of state.journals()) {
     if (
@@ -2838,8 +3035,14 @@ function assertRepositoryContexts(
   config: ProductConfig,
   current: NamespaceManifest,
   desired: NamespaceManifest,
+  scope: RepositoryScope | null = null,
 ): void {
   if (config.syncPolicy.mode !== "default-branch") return;
+  for (const context of scope?.guards ?? [])
+    assertStableRepositoryContext(
+      inspectRepositoryContext(config.root, context.path),
+      context,
+    );
   if (current.repositories.length !== desired.repositories.length)
     throw new Error("Repository scope differs; synchronization is paused");
   const localByPath = new Map(

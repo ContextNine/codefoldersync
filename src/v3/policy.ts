@@ -301,3 +301,20 @@ export function assertMatchingRepositoryContext(
       "Repository branch or HEAD differs; synchronization is paused",
     );
 }
+
+/** Enclosing checkouts are guarded in place, even when their branch is paused. */
+export function assertStableRepositoryContext(
+  local: RepositoryContext,
+  expected: RepositoryContext,
+): void {
+  if (
+    local.path !== expected.path ||
+    local.identity !== expected.identity ||
+    local.branch !== expected.branch ||
+    local.head === null ||
+    local.head !== expected.head
+  )
+    throw new Error(
+      "Repository context changed during synchronization; retry is required",
+    );
+}

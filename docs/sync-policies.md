@@ -12,13 +12,17 @@ codefoldersync setup --mode authority --root /absolute/workspace \
   --sync-policy default-branch --default-branch master
 ```
 
-Working-file transfer requires the configured branch, matching repository identity, and the exact same HEAD commit. A branch name alone is insufficient. Detached or unborn HEAD, active Git operations, mismatched identity, and different commits stop transfer. Configuration does not switch branches, stage changes, copy an index, rewrite remotes, or install hooks.
+Working-file transfer requires the configured branch, matching repository identity, and the exact same HEAD commit. A branch name alone is insufficient. Detached or unborn HEAD, active Git operations, mismatched identity, and different commits suspend the affected repository. Configuration does not switch branches, stage changes, copy an index, rewrite remotes, or install hooks.
+
+The most deeply nested repository owns each path. An eligible nested repository can transfer files while its parent is off-branch, and eligible siblings continue independently. The hub retains suspended scope unchanged. Locally, each suspended repository keeps its previous baseline and catalog instead of accepting an unseen remote version. `sync` and `verify --full` report `inconclusive` with repository reasons while any scope is suspended, even when eligible files transferred successfully. Newly discovered or locally missing repositories pause until their context is enrolled.
 
 Repository context enters the signed snapshot. Apply rechecks the context after remote operations, and interrupted apply checks it before recovery can move a file. Pending work must never be replayed in a different Git context.
 
-During default-branch apply, private Git index, HEAD, and current branch-ref locks prevent cooperating Git commands from switching or committing the checkout. The engine journals its exact nonce-qualified locks outside the workspace and releases them on exit. After a crashed owner process, restart removes only matching locks from that private journal before recovering the apply. A live process, replaced lock, unsafe parent, or ambiguous journal stops recovery. This does not protect against another program directly rewriting Git metadata without Git's locking protocol.
+During default-branch apply, private Git index, HEAD, and current branch-ref locks prevent cooperating Git commands from switching or committing the checkout. The lease also guards enclosing repositories in their existing branch context, since a parent checkout could change files inside a nested repository. An enclosing Git mutation pauses its nested scopes until it finishes. The engine journals its exact nonce-qualified locks outside the workspace and releases them on exit. After a crashed owner process, restart removes only matching locks from that private journal before recovering the apply. A live process, replaced lock, unsafe parent, or ambiguous journal stops recovery. This does not protect against another program directly rewriting Git metadata without Git's locking protocol.
 
-Development gates still open: independently suspending one nested repository without stopping eligible siblings, advancing a context after Git commits without permanently pinning the original HEAD, and complete race/outbox coverage. The initial implementation conservatively stops the whole folder on a mismatched repository. Do not activate it on a daily-driver workspace until those gates and real-folder acceptance pass.
+Mixed-context outbox records remain private while a repository is suspended. Eligible siblings can publish a fresh proposal against the current hub sequence. Returning to the original context resumes the existing CAS retry/merge flow without replaying a stale accepted version over newer sibling work. Immutable objects remain retained.
+
+Development gates still open: advancing a context after Git commits without permanently pinning the original HEAD, and isolating a suspended repository inside an already interrupted multi-repository apply. A pending apply currently stops recovery for the folder if any of its active or enclosing contexts changed. Additional context-transition coverage and obsolete Git-mirroring removal remain required. Do not activate this development build on a daily-driver workspace before those gates and real-folder acceptance pass.
 
 ## Selected files only
 
@@ -50,6 +54,6 @@ Plaintext ENV transfer needs a separate custody decision for the exact workspace
 
 ## Acceptance
 
-The policy integration lane exercises ENV sharing across independently selected branches, retained code/index/HEAD, nested ENV creation and deletion beside local-only files, visible concurrent-value recovery, and matching/default/mismatched Git contexts. Existing grouped product integration scenarios cover adoption, durable apply, structural changes, corruption, and conflicts with independent Git state.
+The policy integration lane exercises ENV sharing across independently selected branches, retained code/index/HEAD, nested ENV creation and deletion beside local-only files, and visible concurrent-value recovery. Its default-branch scenario covers matching contexts, independently paused nested roots, reverse sibling publication, an unborn/locked sibling, native checkout exclusion, mixed-context queues, and real SIGKILL/restart with a partial apply. Existing grouped product integration scenarios cover adoption, durable apply, structural changes, corruption, and conflicts with independent Git state.
 
 These focused cases do not prove release acceptance. Full archived Code trees, native-machine checks, and real-folder stress results are separate evidence in the rollout plan. Passing them requires the final candidate, not an older build's checkpoint.

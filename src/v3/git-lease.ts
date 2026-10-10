@@ -14,7 +14,7 @@ import {
 import { dirname, join, relative } from "node:path";
 import { assertRealAncestors, normalizeRelativePath } from "./paths.js";
 import {
-  assertMatchingRepositoryContext,
+  assertStableRepositoryContext,
   inspectRepositoryContext,
   ownedGitLocks,
   repositoryMetadata,
@@ -113,6 +113,7 @@ function releaseLock(path: string, owner: LeaseOwner): void {
 export function acquireGitLease(
   config: ProductConfig,
   contexts: readonly RepositoryContext[],
+  guards: readonly RepositoryContext[] = [],
 ): Disposable {
   if (config.syncPolicy.mode !== "default-branch" || contexts.length === 0)
     return { [Symbol.dispose]() {} };
@@ -131,11 +132,12 @@ export function acquireGitLease(
   try {
     writeSync(descriptor, `${JSON.stringify(owner)}\n`);
     fsyncSync(descriptor);
-    for (const context of [...contexts].sort((left, right) =>
-      left.path.localeCompare(right.path),
-    )) {
-      assertMatchingRepositoryContext(
-        config.syncPolicy,
+    for (const context of [
+      ...new Map(
+        [...contexts, ...guards].map((value) => [value.path, value]),
+      ).values(),
+    ].sort((left, right) => left.path.localeCompare(right.path))) {
+      assertStableRepositoryContext(
         inspectRepositoryContext(config.root, context.path),
         context,
       );
@@ -156,6 +158,7 @@ export function acquireGitLease(
         join(worktreeMetadata, "HEAD.lock"),
         join(commonMetadata, "refs", "heads", `${context.branch}.lock`),
       ]) {
+        if (locks.includes(path)) continue;
         let parent = config.root;
         for (const component of relative(config.root, dirname(path)).split(
           "/",
@@ -174,8 +177,7 @@ export function acquireGitLease(
         locks.push(path);
         ownedGitLocks.add(path);
       }
-      assertMatchingRepositoryContext(
-        config.syncPolicy,
+      assertStableRepositoryContext(
         inspectRepositoryContext(config.root, context.path),
         context,
       );

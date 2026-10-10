@@ -59,6 +59,10 @@ Git metadata stays local. The signed policy validator rejects a nonempty Git-bou
 
 The complete accepted baseline snapshot also lives as owner-only `baseline.json` so three-way merge can distinguish local, remote, and concurrent change.
 
+With independently suspended repositories, this file retains their previous accepted local entries and contexts while eligible entries advance. The global cursor still names the latest accepted hub event; it does not imply that every suspended scope accepted that event. The derived catalog likewise retains suspended observations.
+
+A normal apply journal stores current/desired eligible manifests, the complete hub event's accepted digest and sequence, the recovery root, and its repository scope. Scope names all discovered/enrolled roots, eligible contexts, suspended reasons, and enclosing checkout guards. Recovery validates that journal scope and proves the complete accepted digest against hub history before applying its eligible projection.
+
 ## Hub SQLite state
 
 | Table              | Purpose                                                                                               |
