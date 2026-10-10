@@ -46,6 +46,57 @@
     "dailyDriverChanged": false,
     "fullNativeFleetAcceptance": false
   },
+  "protectedOriginalObjectCapacity": {
+    "measurementSourceCommit": "edc65c9fc1c2d1c94b2f56a2d1297a2af91ecff7",
+    "mattbook": {
+      "capturedEntries": 401538,
+      "regularLogicalBytes": 43585244435,
+      "uniqueObjects": 329425,
+      "uniqueObjectBytes": 33594020466
+    },
+    "wootbook": {
+      "capturedEntries": 147024,
+      "regularLogicalBytes": 12854394386,
+      "uniqueObjects": 207750,
+      "uniqueObjectBytes": 9844954250
+    },
+    "workermacair": {
+      "capturedEntries": 70961,
+      "regularLogicalBytes": 8149983328,
+      "uniqueObjects": 92971,
+      "uniqueObjectBytes": 7160084595
+    },
+    "combinedUniqueObjects": 499590,
+    "combinedUniqueObjectBytes": 44346476739,
+    "namespaceAndDatabaseOverheadIncluded": false,
+    "payloadsPersisted": false,
+    "valuesReturned": false,
+    "measurementCompleted": true,
+    "provesFullDataBudget": false
+  },
+  "reflinkCapability": {
+    "machineId": "wootbook",
+    "privateMountNamespace": true,
+    "freshImageOnly": true,
+    "imageLogicalBytes": 268435456,
+    "imageAllocatedBytes": 5558272,
+    "distinctPeerInodes": true,
+    "sameFilesystemWorkspaceAndState": true,
+    "copyOnWriteObjectDatabases": true,
+    "copiedStoreExclusiveBytes": [0, 0],
+    "sqliteWritesIsolated": true,
+    "kernelVerifiedFileDeduplication": true,
+    "dedupedWritesIsolated": true,
+    "materializedExclusiveBytesBefore": 2097152,
+    "materializedExclusiveBytesAfter": 0,
+    "directoryRenamePassed": true,
+    "unprivilegedWrites": true,
+    "unchangedProtectedMaster": true,
+    "filesystemUnmounted": true,
+    "exactTemporaryRunCleaned": true,
+    "usesOriginalArchiveCorpus": false,
+    "provesFullDataBudget": false
+  },
   "mattbookNativePreflight": {
     "sshConnected": false,
     "failure": "connection-timeout",
