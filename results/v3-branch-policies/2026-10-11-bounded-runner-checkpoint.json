@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "88404f4bbd8854905ef83e71993a51b3cbfcf2f6",
+  "candidate": {
+    "version": "0.3.0",
+    "archiveSha256": "61e7b399ce9df2a640d8e06382c7d39414c437249f708615637aa922f0867ea7",
+    "independentRebuildByteComparison": true,
+    "acceptedRelease": false
+  },
+  "sourceCheck": {
+    "format": true,
+    "types": true,
+    "build": true,
+    "tests": 58,
+    "passed": 58,
+    "failed": 0,
+    "skipped": 0
+  },
+  "boundedRunnerFixture": {
+    "privateMountNamespace": true,
+    "fixedBackingSizeVerified": true,
+    "actualLoopBackingPathVerified": true,
+    "retainedRootInventory": true,
+    "unprivilegedExecution": true,
+    "mandatoryWorkspaceReflinks": true,
+    "independentObjectDatabaseInodes": true,
+    "immutableObjectTemplate": true,
+    "objectsPreseeded": true,
+    "freshRepetitions": 2,
+    "matchingWorkloadCassette": true,
+    "targetDigestsMatch": true,
+    "unchangedMasterWitnesses": true,
+    "betweenRepetitionCleanup": true,
+    "finalRunCleanup": true,
+    "wrongImageSizeRejected": true,
+    "overlappingResidueRejected": true,
+    "outsideVolumeWorkspaceRejected": true,
+    "imageMaximumBytes": 268435456,
+    "finalImageAllocatedBytes": 13332480,
+    "outerVolumeUnmountedAndRemoved": true,
+    "acceptanceCorpus": false
+  },
+  "originalBackupState": {
+    "allLocalOriginalCiphertextHashesVerified": true,
+    "allLocalOriginalAgeAuthenticationAndZstdIntegrityVerified": true,
+    "workerMacAirDriveDownloadedContentVerified": true,
+    "mattbookDriveDownloadedContentCheck": "in-progress",
+    "wootbookUpload": "not-started",
+    "oldDerivedMastersRetirementApprovedAfterVerification": true,
+    "oldDerivedMastersRetired": false
+  },
+  "completion": {
+    "historicalDriveFullTreeRestores": false,
+    "completeOriginalArchiveCampaign": false,
+    "completeImpressionStress": false,
+    "completeVerascientStress": false,
+    "allNativeFleetGates": false,
+    "releaseAndPilot": false,
+    "goalComplete": false
+  }
+}
