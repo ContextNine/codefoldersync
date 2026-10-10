@@ -29,7 +29,7 @@ Keep `test/product.integration.test.ts` at ten tests or fewer. Prefer a complete
 | Normal merge             | Causal concurrent edits and visible exact conflict                        |
 | Directory identity       | Deep rename and zero object upload                                        |
 | Rename transaction       | File/directory cycles plus case and Unicode spelling changes              |
-| Git boundary             | Nested capture/apply/fsck and external-dir rejection                      |
+| Repository context       | Local Git-state preservation, nested scope, races, context advance        |
 | Protocol                 | Local/SSH parity, version mismatch, frame and object bounds               |
 | Durability               | Injected source seal, apply, adoption, and cutover restarts               |
 | Integrity                | Corrupt hub object rejected before live mutation                          |
@@ -53,14 +53,14 @@ Real fleet acceptance must use the V3 plan's fresh `~/codefoldersync-v3-runs/<ru
 - Is every apply target contained and revalidated?
 - Is prior live data moved to recovery first?
 - Can startup reverse every prepared journal without guessing?
-- Are Git boundaries complete rather than leaf-merged?
+- Does Git metadata remain local, with context revalidated before capture and apply?
 - Is every stable losing version visible or recoverable?
 - Does a failure return non-clean status and preserve evidence?
 - Do docs and schema/protocol versions describe the executable truth?
 
 ## Release gate
 
-A repository candidate requires format, typecheck, tests, build, the focused V3 scenarios, and current CTX9 docs. A daily-driver release additionally requires every external backup, fixture, pseudo-fleet, real-machine, preview, adoption, and cutover gate in `.agents/plans/codefoldersync-v3-recursive-adoption/plan.md`.
+A repository candidate requires format, typecheck, tests, build, the focused V3 scenarios, and current CTX9 docs. A daily-driver release additionally requires the active CTX9 branch-policy plan's backup, complete original-archive, real-folder stress, native-machine, and limited-pilot gates. The original recursive-adoption plan remains a requirements source; its whole-Code rollout and Git-mirroring workflow are superseded.
 
 ## Documentation routing
 

@@ -15,6 +15,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { includedLogicalBytes } from "../src/v3/acceptance.js";
+import { plaintextEnvPolicy } from "../src/v3/policy.js";
 import {
   checkStorageBudget,
   cleanupRunRoot,
@@ -47,6 +49,20 @@ test("bounded acceptance storage is physical, capped, and cleanable", () => {
     assert.ok(inventory.logicalBytes > inventory.allocatedBytes);
     assert.ok(estimateSourceCaptureTransientBytes(inventory) > 0);
     assert.ok(estimateCiphertextReceiptBytes(inventory) > 0);
+
+    const master = join(base, "master");
+    mkdirSync(join(master, "repo", ".git"), { recursive: true });
+    writeFileSync(join(master, "repo", ".git", "object"), "local-metadata");
+    writeFileSync(join(master, "repo", ".env"), "SYNTHETIC=fixture\n");
+    writeFileSync(join(master, "repo", "source.ts"), "export {};\n");
+    assert.equal(
+      includedLogicalBytes(master),
+      Buffer.byteLength("export {};\n"),
+    );
+    assert.equal(
+      includedLogicalBytes(master, plaintextEnvPolicy),
+      Buffer.byteLength("SYNTHETIC=fixture\n"),
+    );
 
     const accepted = checkStorageBudget({
       profile: "mac-transient",

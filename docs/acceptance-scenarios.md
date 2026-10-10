@@ -2,7 +2,7 @@
 
 ## Focused repository integration
 
-`test/product.integration.test.ts` runs seven grouped end-to-end tests in fresh temporary roots. Related cases and fault matrices execute inside those subsystem groups so the product suite stays focused.
+`test/product.integration.test.ts` runs seven grouped end-to-end tests in fresh temporary roots. The policy suite adds two grouped cases for local Git state, context transitions, and ENV-only sharing. Related cases and fault matrices execute inside those subsystem groups so the product suite stays focused.
 
 ### Populated source and two populated targets
 
@@ -15,7 +15,7 @@ Both targets contain exact content, divergent content, target-only content, move
 - every displaced top-level target value has a live recovery object and conflict record;
 - moved-equivalent bytes bind to the source path;
 - reserved and ignored target state remains machine-local;
-- nested Git HEAD and `git fsck --full` match the source;
+- nested Git metadata remains local and eligible repository contexts match;
 - both targets independently force-verify clean.
 
 ### Signed cutover and normal multi-writer synchronization
@@ -40,7 +40,7 @@ The suite proves:
 - source seal, adoption, normal apply, and cutover resume at every injected durable phase;
 - an unrelated edit during interrupted apply remains live and blocks resume;
 - directory conflict recovery works from its immutable subtree manifest;
-- contained Git indirection transfers and passes `git fsck --full`;
+- contained Git indirection is validated without transferring its metadata;
 - a persistent Codex repository-coordination lock is excluded while an ordinary Git lock still fails closed;
 - corrupt hub objects fail before target mutation;
 - case/Unicode aliases, FIFOs, and sockets fail closed.

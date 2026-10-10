@@ -9,7 +9,7 @@ codefoldersync status --config <path>
 codefoldersync conflicts --config <path>
 ```
 
-Status reports lifecycle, config revision, hub sequence, derived catalog size, accepted catalog-history count, retained tombstones, Git-boundary count, retained conflicts, and verified adoption peers. Catalog status is observation-only; V3 has no membership mutation command.
+Status reports lifecycle, config revision, hub sequence, derived catalog size, accepted catalog-history count, retained tombstones, repository contexts, held work, retained conflicts, and verified adoption peers. Catalog status is observation-only; V3 has no membership mutation command.
 
 If the hub is unavailable or rejects the local projection, status still returns local lifecycle, authority, revision, cursor, outbox, journal, catalog, tombstone, recovery, and conflict evidence with `hubReachable: false`, a null hub sequence, and the connection error. It does not describe an offline peer as clean.
 
@@ -17,7 +17,7 @@ If the hub is unavailable or rejects the local projection, status still returns 
 
 The authority runs `adoption seal` only after external backup gates pass. A target runs `adoption plan`, reviews the returned counts and recovery consequences, then applies the exact adoption ID. Any target change makes that plan stale.
 
-`adoption verify` is a full content and Git check. Cutover requires every non-hub target to have recorded the current source sequence and digest and requires `--approve`.
+`adoption verify` checks included content and eligible repository contexts. Git metadata stays local. Cutover requires every non-hub target to have recorded the current source sequence and digest and requires `--approve`.
 
 ## Normal operation
 
@@ -29,7 +29,7 @@ codefoldersync service status
 codefoldersync service logs
 ```
 
-`verify --full` rehashes all included files and Git boundaries. `offline` and `inconclusive` are failures. `conflict` means synchronization completed while retained explicit conflict evidence remains.
+`verify --full` rehashes included files and rechecks repository contexts. Suspended scope reports `inconclusive`, even when eligible siblings transferred. `offline` and `inconclusive` are not acceptance passes. `conflict` means synchronization completed while retained explicit conflict evidence remains.
 
 An authorized local caller can request a targeted post-publication checkout refresh through CodeFolderSync:
 
@@ -81,6 +81,6 @@ Repository commands do not authenticate Rclone or decide the Google Drive destin
 
 `acceptance witness`, backup receipt, restore slot, `acceptance pseudo-fleet`, and `acceptance isolated-fleet` operate only on explicitly named fixture and sentinel roots. They do not discover or default to `~/Code`. Capacity is based on allocated blocks and fails before a fixed machine profile is crossed. `cleanup-run` is the shared exact-path primitive for bulk acceptance cleanup and rejects a missing or mismatched sentinel.
 
-The isolated runner also requires strict SSH between every machine pair and the exact recorded build everywhere. Its capacity preflight runs remotely on all three machines before any repetition. The bounded completion controller uses a generated corpus of at most 25 GiB and removes repetition workspaces after their sanitized witnesses are durable.
+The isolated runner also requires strict SSH between every machine pair and the exact recorded build everywhere. Its capacity preflight runs remotely on all three machines before any repetition. A generated corpus can check runner mechanics but cannot substitute for the requested complete original-archive campaign. See [full-view storage](full-view-storage.md) for the current capability and runner limitations.
 
 The isolated runner installs native service definitions disabled below each repetition root. It activates them only after every target verifies and the acceptance-only cutover projects the normal revision. At the end, or after an interruption, it stops and uninstalls each run-qualified service before exact sentinel cleanup. Only bounded sanitized evidence remains below the Wootbook controller root.

@@ -49,6 +49,7 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 | Setup, enrollment, services            | [Installation](installation.md)                       |
 | Operator workflow                      | [Operations](operations.md)                           |
 | Executable acceptance                  | [Acceptance scenarios](acceptance-scenarios.md)       |
+| Bounded full-folder test storage       | [Full-view storage](full-view-storage.md)             |
 | Maintainer workflow                    | [Development](development.md)                         |
 
 ## Source ownership

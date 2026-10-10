@@ -29,7 +29,8 @@ import { ensureIgnore, loadConfig } from "./config.js";
 import { compileIgnore, defaultIgnore } from "./ignore.js";
 import { ObjectStore } from "./objects.js";
 import { LocalState } from "./state.js";
-import type { ProductConfig } from "./types.js";
+import type { ProductConfig, SyncPolicy } from "./types.js";
+import { defaultSyncPolicy, policyIncludes } from "./policy.js";
 import {
   checkStorageBudget,
   cleanupRunRoot,
@@ -473,7 +474,10 @@ function copyTree(source: string, destination: string): void {
   makeTreeOwnerWritable(destination);
 }
 
-export function includedLogicalBytes(root: string): number {
+export function includedLogicalBytes(
+  root: string,
+  policy: SyncPolicy = defaultSyncPolicy,
+): number {
   const absoluteRoot = resolve(root);
   const rootStat = lstatSync(absoluteRoot);
   const ignorePath = join(absoluteRoot, ".codefoldersyncignore");
@@ -488,8 +492,10 @@ export function includedLogicalBytes(root: string): number {
       if (stat.dev !== rootStat.dev)
         throw new Error("Acceptance capacity refuses a nested mount");
       const local = relative(absoluteRoot, path).split(sep).join("/");
+      if (entry.name.toLowerCase() === ".git") continue;
       if (ignore.ignores(local, stat.isDirectory())) continue;
       if (stat.isDirectory()) visit(path);
+      else if (!policyIncludes(policy, local)) continue;
       else if (stat.isFile()) bytes += stat.size;
       else if (stat.isSymbolicLink())
         bytes += Buffer.byteLength(readlinkSync(path), "utf8");
