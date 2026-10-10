@@ -21,6 +21,8 @@ import {
   DistributedAgentTermination,
   type AcceptanceCrashPoint,
   type ProcessDistributedExecutor,
+  type NativeFilesystemFault,
+  type NativeFilesystemFaultLibrary,
 } from "./distributed-process.js";
 import { HubStore } from "./hub.js";
 import { ObjectStore } from "./objects.js";
@@ -35,6 +37,7 @@ export interface AcceptanceFaultResult {
   readonly hubOutageRejectedAndResumed: true;
   readonly corruptionRejectedBySyncAndVerifier: true;
   readonly repairedCorruptionConverged: true;
+  readonly nativeFilesystemFaults: readonly NativeFilesystemFault[];
   readonly scenarioDigest: string;
 }
 
@@ -44,6 +47,7 @@ export async function runAcceptanceFaults(input: {
   readonly executor: ProcessDistributedExecutor;
   readonly run: CleanupRunSpec;
   readonly seed: string;
+  readonly nativeFaultLibrary?: NativeFilesystemFaultLibrary;
 }): Promise<AcceptanceFaultResult> {
   const { fleet, executor, run, seed } = input;
   const root = validateCleanupRunRoot(run);
@@ -311,6 +315,51 @@ export async function runAcceptanceFaults(input: {
   }
   await converge();
   for (const peer of all) proveLeaf(peer, corruptionPath, corruptionBytes);
+  const nativeFilesystemFaults: NativeFilesystemFault[] = [];
+  if (input.nativeFaultLibrary !== undefined) {
+    for (const fault of ["enospc-write", "eio-fsync"] as const) {
+      const local = `${movedWorkspace}/native-${fault}.txt`;
+      const prior = content(`${fault}-prior`);
+      const desired = content(`${fault}-desired`);
+      create(source, local, prior);
+      await converge();
+      writeFileSync(join(source.root, local), desired, { mode: 0o600 });
+      cassette.push({
+        operation: `replace:${local}`,
+        digest: hashBytes(desired),
+      });
+      await sync(source);
+      const failed = await executor.nativeFaultSync(
+        target,
+        loadConfig(target.configPath),
+        run,
+        input.nativeFaultLibrary,
+        fault,
+      );
+      proof(
+        failed.status === "inconclusive",
+        "Native filesystem failure did not stop apply",
+      );
+      proof(
+        failed.reasons.some((reason) =>
+          reason.includes(fault === "enospc-write" ? "ENOSPC" : "EIO"),
+        ),
+        "Native failure did not report its injected syscall error",
+      );
+      const recoveredPrior = recoveryProbe(target.stateDir, local);
+      proof(
+        hashBytes(readFileSync(recoveredPrior)) === hashBytes(prior),
+        "Native filesystem failure did not retain prior bytes",
+      );
+      await converge();
+      for (const peer of all) proveLeaf(peer, local, desired);
+      proof(
+        hashBytes(readFileSync(recoveredPrior)) === hashBytes(prior),
+        "Clean native retry removed prior recovery evidence",
+      );
+      nativeFilesystemFaults.push(fault);
+    }
+  }
   return {
     processCrashes: ["after-outbox", "after-hub-accept", "after-moves-staged"],
     unknownAcknowledgementRetried: true,
@@ -319,6 +368,7 @@ export async function runAcceptanceFaults(input: {
     hubOutageRejectedAndResumed: true,
     corruptionRejectedBySyncAndVerifier: true,
     repairedCorruptionConverged: true,
+    nativeFilesystemFaults,
     scenarioDigest: hashText(canonicalJson(cassette)),
   };
 }
@@ -384,6 +434,30 @@ function pendingApplyCount(stateDir: string): number {
     .get();
   proof(typeof row?.count === "number", "Apply journal count is unavailable");
   return row.count;
+}
+
+function recoveryProbe(stateDir: string, local: string): string {
+  using database = new DatabaseSync(join(stateDir, "state.sqlite"), {
+    readOnly: true,
+  });
+  const row = database
+    .prepare("SELECT json FROM journals WHERE kind='snapshot-apply'")
+    .get();
+  proof(typeof row?.json === "string", "Native failure lacks an apply journal");
+  const journal: unknown = JSON.parse(row.json);
+  proof(
+    typeof journal === "object" &&
+      journal !== null &&
+      "recoveryRoot" in journal &&
+      typeof journal.recoveryRoot === "string",
+    "Native failure lacks a recovery root",
+  );
+  proof(
+    journal.recoveryRoot.startsWith(`${resolve(stateDir)}${sep}`) &&
+      realpathSync(journal.recoveryRoot) === journal.recoveryRoot,
+    "Native recovery must remain in physical private state",
+  );
+  return join(journal.recoveryRoot, local);
 }
 
 function hubSequence(path: string, folderId: string): number {

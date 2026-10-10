@@ -239,6 +239,26 @@ renameSync(peer + '/Code/folder', peer + '/Code/renamed');`;
   ownTree(templateDirectory);
   const releaseSha256 = "d".repeat(64);
   const repository = fileURLToPath(new URL("../../", import.meta.url));
+  const nativeLibrary = join(root, "native-filesystem-fault.so");
+  command("cc", [
+    "-shared",
+    "-fPIC",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-o",
+    nativeLibrary,
+    join(repository, "test/fixtures/filesystem-fault.c"),
+  ]);
+  chownSync(nativeLibrary, uid, gid);
+  chmodSync(nativeLibrary, 0o500);
+  const nativeFaultLibrary = {
+    path: nativeLibrary,
+    sha256: createHash("sha256")
+      .update(readFileSync(nativeLibrary))
+      .digest("hex"),
+  };
   const installation = join(mountpoint, "test-install");
   command(process.execPath, [
     join(repository, "dist/product-cli.js"),
@@ -274,6 +294,7 @@ renameSync(peer + '/Code/folder', peer + '/Code/renamed');`;
     targetOrder: ["wootbook", "workermacair"],
     hubMachineId: "wootbook",
     masters,
+    nativeFaultLibrary,
     storage: {
       kind: "bounded-reflink",
       volumeRunId: "private-reflink-capability-v1",
@@ -313,6 +334,11 @@ console.log(JSON.stringify(results));`;
     ]),
   );
   assert.equal(results.length, 2);
+  for (const result of results)
+    assert.deepEqual(result.faults.nativeFilesystemFaults, [
+      "enospc-write",
+      "eio-fsync",
+    ]);
   assert.ok(
     results.every((result) => result.passed && result.storage.objectsPreseeded),
   );
@@ -403,6 +429,7 @@ console.log(JSON.stringify(results));`;
       identityPath: identity,
       candidateArchive,
       candidateSha256,
+      nativeFaultLibrary,
       sources,
       allocationLimitBytes: 512 * 1024 ** 2,
       seed: "public-controller-only",

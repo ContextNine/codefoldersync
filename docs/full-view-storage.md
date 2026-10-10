@@ -80,10 +80,26 @@ Crash and recovery agent actions require an exact disposable-run sentinel and
 physical contained peer roots. Recovery destinations stay below private peer
 state with checked ancestors. Results contain only counts, pass flags, crash
 phases, and the scenario digest, never probe contents or real archived paths.
-These stages do not substitute for the remaining native write/fsync, sustained
-churn, Git-state, AI/replay, and machine-platform gates.
+When `nativeFaultLibrary` names a protected Linux ELF artifact and its exact
+SHA-256, the runner also injects `ENOSPC` writes and `EIO` fsync calls through
+the native staging-only preload shim. Each failure must stop apply with that
+syscall error and retain the preceding probe bytes under the journal's private
+recovery root. Clean retry must converge every peer while keeping that recovery
+copy. The library is revalidated before each injection, and only run-local peers
+with a matching sentinel may load it. Results list the executed native faults;
+an empty list explicitly means this lane was not run.
+
+These stages do not substitute for sustained churn, Git-state, AI/replay, and
+machine-platform gates, or prove that any full original corpus has run yet.
 
 ## Historical full-archive controller
+
+The controller requires `nativeFaultLibrary` with a physical protected library
+path and its exact SHA-256 before creating a volume. Build the small staging
+fault shim from `test/fixtures/filesystem-fault.c`, record its source and artifact
+hashes, remove its write bits, and account for the retained artifact with the
+other control data. The real controller cannot silently omit native write/fsync
+failure coverage. This is a test artifact, not a daily-driver preload setting.
 
 After building and verifying the candidate, run the external controller inside a fresh private mount namespace:
 

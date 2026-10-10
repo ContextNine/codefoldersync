@@ -166,6 +166,16 @@ function validateInput() {
     assert.equal(typeof argument, "string");
   physical(spec.downloadCommand[0]);
   assert.match(spec.candidateSha256, /^[a-f0-9]{64}$/u);
+  assert.ok(spec.nativeFaultLibrary);
+  const faultLibrary = lstatSync(physical(spec.nativeFaultLibrary.path));
+  assert.ok(faultLibrary.isFile() && (faultLibrary.mode & 0o222) === 0);
+  assert.match(spec.nativeFaultLibrary.sha256, /^[a-f0-9]{64}$/u);
+  assert.equal(
+    createHash("sha256")
+      .update(readFileSync(spec.nativeFaultLibrary.path))
+      .digest("hex"),
+    spec.nativeFaultLibrary.sha256,
+  );
   assert.ok(lstatSync(physical(spec.candidateArchive)).isFile());
   assert.ok(Array.isArray(spec.retainedRoots) && spec.retainedRoots.length > 0);
   const roots = spec.retainedRoots.map(physical);
@@ -582,6 +592,7 @@ async function run() {
     targetOrder: ["wootbook", "workermacair"],
     hubMachineId: "wootbook",
     masters: spec.restored.masters,
+    nativeFaultLibrary: spec.nativeFaultLibrary,
     storage: {
       kind: "bounded-reflink",
       volumeRunId: spec.runId,

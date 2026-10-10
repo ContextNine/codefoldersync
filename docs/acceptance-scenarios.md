@@ -69,6 +69,7 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - both pseudo-fleet repetitions run the fault stages in [the full-tree fault runner](full-view-storage.md#full-tree-fault-stages), retaining the entire adopted corpus through real process crashes, a subtree move, concurrent writes and private recovery, hub outage, and deliberately corrupted new content;
 - the AI workload requires at least 50 changed TypeScript files across eight directories, verifies required create, move, and delete behavior, records a private cassette, and replays it to the same final digest;
 - the Linux durability lane injects real `ENOSPC` write and `EIO` fsync results below materialization staging, requires an inconclusive result with retained prior bytes, then retries to clean full verification;
+- the historical full-archive controller requires the hashed protected native fault library and executes that write/fsync failure lane inside both complete-corpus repetitions;
 - the Linux watcher lane freezes the daemon, proves `IN_Q_OVERFLOW` with a separate native watcher, writes the included marker after saturation, and requires the scheduled full scan to publish it;
 - the Linux mount lane runs the installed product in a networkless, read-only container with a real nested tmpfs and requires source seal to stop before hub publication;
 - the large-snapshot lane scans 4,096 TypeScript files and proves a no-change pass uploads zero objects;

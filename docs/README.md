@@ -54,31 +54,31 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 
 ## Source ownership
 
-| Source                                        | Responsibility                                                              |
-| --------------------------------------------- | --------------------------------------------------------------------------- |
-| `src/product-cli.ts`                          | Active V3 CLI, daemon, lifecycle and service gates                          |
-| `src/v3/types.ts`                             | Schema/protocol 3 contracts                                                 |
-| `src/v3/config.ts`                            | Authority and peer keys, signed revisions, projections                      |
-| `src/v3/ignore.ts`                            | Root ignore compiler and hard exclusions                                    |
-| `src/v3/catalog.ts`                           | Recursive discovery, scope projection, stable nodes, semantic digest        |
-| `src/v3/objects.ts`                           | Immutable chunks/manifests and materialization                              |
-| `src/v3/state.ts`                             | Derived catalog, durable outbox, journals, conflicts                        |
-| `src/v3/hub.ts`                               | CAS checkpoints, config authority, barrier and history                      |
-| `src/v3/transport.ts`                         | Local adapter and bounded framed SSH process                                |
-| `src/v3/engine.ts`                            | Seal, adoption, merge, apply, verify and recovery                           |
-| `src/v3/setup.ts`                             | Authority setup and target-local enrollment                                 |
-| `src/v3/distributed.ts`                       | Resumable multi-machine setup and per-target approval                       |
-| `src/v3/acceptance.ts`                        | Witnessed two-run real-snapshot pseudo-fleet execution                      |
-| `src/v3/acceptance-faults.ts`                 | Full-corpus process-crash, move, conflict, outage, and corruption scenarios |
-| `src/v3/acceptance-reflink.ts`                | Private bounded-volume validation and immutable object seeding              |
-| `scripts/run_bounded_archived_acceptance.mjs` | Sequential historical Drive restores and bounded full-tree runner lifecycle |
-| `src/v3/backup.ts`                            | Streaming encrypted capture and portable/platform recovery oracles          |
-| `src/v3/isolated.ts`                          | Three-machine SSH, native service, replay, and timing execution             |
-| `src/v3/visibility.ts`                        | Hashed AI path-state observation for controller-owned timing                |
-| `src/v3/watcher.ts`                           | Included-directory native watching and full-scan wakeups                    |
-| `src/v3/restore.ts`                           | Witnessed encrypted snapshot restoration into protected masters             |
-| `src/v3/git-context.ts`                       | Committed-tree baselines for independent default-branch advances            |
-| `test/product.integration.test.ts`            | Focused V3 end-to-end proof                                                 |
+| Source                                        | Responsibility                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------- |
+| `src/product-cli.ts`                          | Active V3 CLI, daemon, lifecycle and service gates                              |
+| `src/v3/types.ts`                             | Schema/protocol 3 contracts                                                     |
+| `src/v3/config.ts`                            | Authority and peer keys, signed revisions, projections                          |
+| `src/v3/ignore.ts`                            | Root ignore compiler and hard exclusions                                        |
+| `src/v3/catalog.ts`                           | Recursive discovery, scope projection, stable nodes, semantic digest            |
+| `src/v3/objects.ts`                           | Immutable chunks/manifests and materialization                                  |
+| `src/v3/state.ts`                             | Derived catalog, durable outbox, journals, conflicts                            |
+| `src/v3/hub.ts`                               | CAS checkpoints, config authority, barrier and history                          |
+| `src/v3/transport.ts`                         | Local adapter and bounded framed SSH process                                    |
+| `src/v3/engine.ts`                            | Seal, adoption, merge, apply, verify and recovery                               |
+| `src/v3/setup.ts`                             | Authority setup and target-local enrollment                                     |
+| `src/v3/distributed.ts`                       | Resumable multi-machine setup and per-target approval                           |
+| `src/v3/acceptance.ts`                        | Witnessed two-run real-snapshot pseudo-fleet execution                          |
+| `src/v3/acceptance-faults.ts`                 | Full-corpus crash, move, conflict, outage, corruption, and native I/O scenarios |
+| `src/v3/acceptance-reflink.ts`                | Private bounded-volume validation and immutable object seeding                  |
+| `scripts/run_bounded_archived_acceptance.mjs` | Sequential historical Drive restores and bounded full-tree runner lifecycle     |
+| `src/v3/backup.ts`                            | Streaming encrypted capture and portable/platform recovery oracles              |
+| `src/v3/isolated.ts`                          | Three-machine SSH, native service, replay, and timing execution                 |
+| `src/v3/visibility.ts`                        | Hashed AI path-state observation for controller-owned timing                    |
+| `src/v3/watcher.ts`                           | Included-directory native watching and full-scan wakeups                        |
+| `src/v3/restore.ts`                           | Witnessed encrypted snapshot restoration into protected masters                 |
+| `src/v3/git-context.ts`                       | Committed-tree baselines for independent default-branch advances                |
+| `test/product.integration.test.ts`            | Focused V3 end-to-end proof                                                     |
 
 ## Vocabulary
 

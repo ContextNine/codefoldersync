@@ -1,7 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { canonicalJson } from "../v2/hash.js";
+import { canonicalJson, hashBytes } from "../v2/hash.js";
 import { productVersion } from "../v2/service.js";
 import { shellQuote } from "../executor.js";
 import {
@@ -45,6 +51,40 @@ import { assertRealAncestors } from "./paths.js";
 
 export type AcceptanceCrashPoint =
   "after-outbox" | "after-hub-accept" | "after-moves-staged";
+
+export interface NativeFilesystemFaultLibrary {
+  readonly path: string;
+  readonly sha256: string;
+}
+
+export type NativeFilesystemFault = "enospc-write" | "eio-fsync";
+
+export function validateNativeFaultLibrary(
+  library: NativeFilesystemFaultLibrary,
+): void {
+  if (
+    process.platform !== "linux" ||
+    /[\s:]/u.test(library.path) ||
+    resolve(library.path) !== library.path ||
+    realpathSync(library.path) !== library.path ||
+    !/^[a-f0-9]{64}$/u.test(library.sha256)
+  )
+    throw new Error("Native fault library requires an exact Linux artifact");
+  const stat = lstatSync(library.path);
+  if (
+    !stat.isFile() ||
+    stat.nlink !== 1 ||
+    (stat.mode & 0o222) !== 0 ||
+    stat.size > 1024 ** 2
+  )
+    throw new Error("Native fault library must be a protected bounded file");
+  const bytes = readFileSync(library.path);
+  if (
+    !bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
+    hashBytes(bytes) !== library.sha256
+  )
+    throw new Error("Native fault library artifact verification failed");
+}
 
 export class DistributedAgentTermination extends Error {
   public constructor(public readonly signal: NodeJS.Signals) {
@@ -287,6 +327,38 @@ export class ProcessDistributedExecutor implements DistributedExecutor {
       run,
       point,
     });
+  }
+
+  public async nativeFaultSync(
+    machine: DistributedMachineSpec,
+    config: ProductConfig,
+    run: CleanupRunSpec,
+    library: NativeFilesystemFaultLibrary,
+    fault: NativeFilesystemFault,
+  ): Promise<SyncSummary> {
+    if (machine.endpoint.kind !== "local")
+      throw new Error("Native filesystem injection requires a run-local peer");
+    assertAcceptancePeer(config, run);
+    validateNativeFaultLibrary(library);
+    return syncSummary(
+      await callAgent(
+        {
+          ...machine,
+          command: [
+            "/usr/bin/env",
+            `LD_PRELOAD=${library.path}`,
+            `CODEFOLDERSYNC_TEST_FS_FAULT=${fault}`,
+            `CODEFOLDERSYNC_TEST_FS_MATCH=${join(config.stateDir, "staging")}${sep}`,
+            ...machine.command,
+          ],
+        },
+        {
+          action: "sync",
+          configPath: machine.configPath,
+          expected: expectation(config),
+        },
+      ),
+    );
   }
 
   public async recoverAcceptanceConflict(

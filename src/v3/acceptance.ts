@@ -21,7 +21,11 @@ import {
   prepareDistributedSetupV3,
   type DistributedFleetSpec,
 } from "./distributed.js";
-import { ProcessDistributedExecutor } from "./distributed-process.js";
+import {
+  ProcessDistributedExecutor,
+  validateNativeFaultLibrary,
+  type NativeFilesystemFaultLibrary,
+} from "./distributed-process.js";
 import {
   runAcceptanceFaults,
   type AcceptanceFaultResult,
@@ -77,6 +81,7 @@ export interface PseudoFleetAcceptanceSpec {
   readonly hubMachineId: string;
   readonly masters: readonly PseudoFleetMasterSpec[];
   readonly storage?: BoundedReflinkStorage;
+  readonly nativeFaultLibrary?: NativeFilesystemFaultLibrary;
 }
 
 export interface PseudoFleetRunResult {
@@ -460,6 +465,9 @@ async function runPseudoFleetRepetition(
     executor,
     run: { schemaVersion: 1, runId: spec.runId, runRoot: spec.runRoot },
     seed: spec.seed,
+    ...(spec.nativeFaultLibrary === undefined
+      ? {}
+      : { nativeFaultLibrary: spec.nativeFaultLibrary }),
   });
   const sourceVerification = await executor.verify(
     distributed.authority,
@@ -764,6 +772,8 @@ function assertPseudoFleetSpec(
 }
 
 function validatePseudoFleetSpec(spec: PseudoFleetAcceptanceSpec): void {
+  if (spec.nativeFaultLibrary !== undefined)
+    validateNativeFaultLibrary(spec.nativeFaultLibrary);
   if (spec.schemaVersion !== 1 || spec.repetitions !== 2)
     throw new Error(
       "Pseudo-fleet acceptance requires schema 1 and two repetitions",
