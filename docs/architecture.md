@@ -14,7 +14,7 @@ The lifecycle begins in `adoption`. Only the authority can seal a checkpoint in 
 
 The scanner recursively walks the physical root without following symlinks or mounts. It derives stable node IDs from accepted path and local filesystem identity. Regular files use immutable chunks and V3 manifests. Symlinks store exact target text. Directories are catalog nodes, so a stable subtree move changes placement without uploading descendant objects.
 
-Every `.git` occurrence becomes a boundary. Physical directories and contained indirection targets are captured as immutable trees. External indirection stops the scan. Apply stages and verifies the complete Git tree before replacing the live boundary.
+Git entries and contained metadata directories stay local. The scanner discovers repository identity, branch, HEAD, and in-progress Git operations without publishing Git file contents. Default-branch snapshots bind repository contexts; selected-files snapshots allow intentionally shared working files across branches. External indirection stops the scan. The [policy contract](sync-policies.md) records current development gates and rollout restrictions.
 
 ## Hub
 

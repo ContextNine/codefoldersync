@@ -109,6 +109,10 @@ scenario(
       assert.equal(sourceBefore.status, "clean", JSON.stringify(sourceBefore));
 
       for (const target of [fleet.beta, fleet.gamma]) {
+        const targetHead = git(join(target.config.root, "clients", "app"), [
+          "rev-parse",
+          "HEAD",
+        ]);
         const plan = await planAdoptionV3(target.config);
         assert.ok(plan.summary["target-only"] > 0);
         assert.ok(plan.summary.divergent > 0);
@@ -225,10 +229,7 @@ scenario(
             "rev-parse",
             "HEAD",
           ]),
-          git(join(fleet.authority.root, "clients", "app"), [
-            "rev-parse",
-            "HEAD",
-          ]),
+          targetHead,
         );
         assert.equal((await verifyFullV3(target.config)).status, "clean");
       }
@@ -869,7 +870,9 @@ scenario(
         readFileSync(join(authority.root, "renamed-deep", "child.txt"), "utf8"),
         "nested\n",
       );
-      assert.equal(existsSync(join(authority.root, "deep")), false);
+      assert.doesNotThrow(() =>
+        git(join(authority.root, "deep", "nested-repo"), ["fsck", "--full"]),
+      );
 
       writeFileSync(
         join(beta.root, "clients", "app", "node_modules", "local.txt"),
@@ -1062,11 +1065,12 @@ scenario(
         ),
         "nested\n",
       );
-      assert.doesNotThrow(() =>
-        git(join(authority.root, conflictDirectory, "nested-repo"), [
-          "fsck",
-          "--full",
-        ]),
+      assert.equal(
+        readFileSync(
+          join(authority.root, conflictDirectory, "nested-repo", "README.md"),
+          "utf8",
+        ),
+        "nested repository\n",
       );
       const conflict = (await statusV3(beta)).conflicts.find(
         (value) =>
@@ -1084,8 +1088,15 @@ scenario(
         readFileSync(join(recovered, "child.txt"), "utf8"),
         "nested\n",
       );
+      assert.equal(
+        readFileSync(join(recovered, "nested-repo", "README.md"), "utf8"),
+        "nested repository\n",
+      );
       assert.doesNotThrow(() =>
-        git(join(recovered, "nested-repo"), ["fsck", "--full"]),
+        git(join(authority.root, "remote-deep", "nested-repo"), [
+          "fsck",
+          "--full",
+        ]),
       );
     });
   },
@@ -1097,6 +1108,10 @@ scenario(
   async () => {
     await withFleet(async (fleet) => {
       const { authority, beta } = await adoptAndCutover(fleet);
+      const targetHead = git(join(beta.root, "clients", "app"), [
+        "rev-parse",
+        "HEAD",
+      ]);
       let movingPath = join(authority.root, "moving-apply");
       mkdirSync(movingPath);
       writeFileSync(join(movingPath, "child.txt"), "moving\n");
@@ -1188,7 +1203,7 @@ scenario(
         );
         assert.equal(
           git(join(beta.root, "clients", "app"), ["rev-parse", "HEAD"]),
-          git(join(authority.root, "clients", "app"), ["rev-parse", "HEAD"]),
+          targetHead,
         );
       }
     });
@@ -1253,13 +1268,13 @@ scenario(
       assert.equal(existsSync(join(beta.root, "caf\u00e9.txt")), false);
       assert.equal(
         readFileSync(
-          join(beta.root, "open_source", "app", "node_modules", "local.txt"),
+          join(beta.root, "clients", "app", "node_modules", "local.txt"),
           "utf8",
         ),
         "beta ignored dependency\n",
       );
       assert.doesNotThrow(() =>
-        git(join(beta.root, "open_source", "app"), ["fsck", "--full"]),
+        git(join(beta.root, "clients", "app"), ["fsck", "--full"]),
       );
     });
   },
@@ -1305,7 +1320,7 @@ scenario(
 
 scenario(
   "normal sync",
-  "synchronizes a contained Git indirection",
+  "synchronizes selected working files beside local contained Git metadata",
   async () => {
     await withFleet(async (fleet) => {
       const { authority, beta } = await adoptAndCutover(fleet);
@@ -1320,36 +1335,37 @@ scenario(
       writeFileSync(join(worktree, "README.md"), "contained metadata\n");
       git(worktree, ["add", "."]);
       git(worktree, ["commit", "-m", "contained indirection"]);
+      const targetWorktree = join(beta.root, "contained-worktree");
+      git(beta.root, [
+        "init",
+        "--separate-git-dir",
+        join(beta.root, "contained-metadata.git"),
+        targetWorktree,
+      ]);
+      writeFileSync(
+        join(targetWorktree, "README.md"),
+        "local target baseline\n",
+      );
+      git(targetWorktree, ["add", "."]);
+      git(targetWorktree, ["commit", "-m", "local fixture"]);
+      const targetHead = git(targetWorktree, ["rev-parse", "HEAD"]);
+      const targetGitEntry = readFileSync(join(targetWorktree, ".git"), "utf8");
       assertSynced(await syncFolderV3(authority));
       assertSynced(await syncFolderV3(beta));
-      assert.match(
-        readFileSync(join(beta.root, "contained-worktree", ".git"), "utf8"),
-        /^gitdir: \.\.\/contained-metadata\.git\n$/u,
+      assert.equal(
+        readFileSync(join(targetWorktree, ".git"), "utf8"),
+        targetGitEntry,
       );
       assert.equal(
         git(join(beta.root, "contained-worktree"), ["rev-parse", "HEAD"]),
-        git(worktree, ["rev-parse", "HEAD"]),
+        targetHead,
       );
       assert.doesNotThrow(() =>
         git(join(beta.root, "contained-worktree"), ["fsck", "--full"]),
       );
-      await using transport = await HubTransport.connect(authority.hub);
-      const mutations = (await transport.history(authority.folderId)).flatMap(
-        (event) =>
-          typeof event.mutations_json === "string"
-            ? (JSON.parse(event.mutations_json) as {
-                readonly kind?: unknown;
-                readonly objectIds?: unknown;
-              }[])
-            : [],
-      );
-      assert.ok(
-        mutations.some(
-          (mutation) =>
-            mutation.kind === "git-state" &&
-            Array.isArray(mutation.objectIds) &&
-            mutation.objectIds.length > 0,
-        ),
+      assert.equal(
+        readFileSync(join(targetWorktree, "README.md"), "utf8"),
+        "contained metadata\n",
       );
     });
   },
@@ -1687,7 +1703,7 @@ scenario(
         writeFileSync(join(gitDirectory, "index.lock"), "");
         assert.throws(
           () => scanNamespace(config, objects, ensureIgnore(root), [], true),
-          /Transient Git lock cannot be captured: index\.lock/u,
+          /Git mutation is in progress/u,
         );
       });
     });

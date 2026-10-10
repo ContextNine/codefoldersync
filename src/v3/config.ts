@@ -29,6 +29,8 @@ import {
   type UnsignedFolderConfig,
 } from "./types.js";
 import { verifyRoot } from "./paths.js";
+import { defaultSyncPolicy, validateSyncPolicy } from "./policy.js";
+import type { SyncPolicy } from "./types.js";
 
 export function defaultRoot(): string {
   return join(homedir(), "Code");
@@ -74,7 +76,10 @@ export function createAuthorityConfig(input: {
   readonly peerName: string;
   readonly hub: HubConfig;
   readonly backupWitness?: string;
+  readonly syncPolicy?: SyncPolicy;
 }): ProductConfig {
+  const syncPolicy = input.syncPolicy ?? defaultSyncPolicy;
+  validateSyncPolicy(syncPolicy);
   const root = resolve(input.root);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   verifyRoot(root);
@@ -106,6 +111,7 @@ export function createAuthorityConfig(input: {
     authority: { peerId, publicKey: authorityKeys.publicKey },
     peers: [peer],
     ignoreDigest: ignore.digest,
+    syncPolicy,
     lifecycle: "adoption",
     backupWitness: input.backupWitness ?? null,
     service: { intervalMs: 150, reconcileSeconds: 600 },
@@ -280,6 +286,7 @@ export function verifyPayload(
 }
 
 export function verifyConfig(config: ProductConfig): void {
+  validateSyncPolicy(config.syncPolicy);
   if (
     config.schemaVersion !== schemaVersion ||
     config.protocolVersion !== protocolVersion
@@ -394,6 +401,7 @@ export function signedConfigPayload(config: ProductConfig): unknown {
     authority: config.authority,
     peers: config.peers,
     ignoreDigest: config.ignoreDigest,
+    syncPolicy: config.syncPolicy,
     lifecycle: config.lifecycle,
     backupWitness: config.backupWitness,
     service: config.service ?? null,

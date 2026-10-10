@@ -10,7 +10,13 @@ import {
   preparePeerEnrollment,
   setupAuthorityV3,
 } from "./setup.js";
-import type { HubConfig, ProductConfig, SyncSummary } from "./types.js";
+import type {
+  HubConfig,
+  ProductConfig,
+  SyncSummary,
+  SyncPolicy,
+} from "./types.js";
+import { defaultSyncPolicy, validateSyncPolicy } from "./policy.js";
 
 export interface FleetSetupPeerSpec {
   readonly peerName: string;
@@ -25,6 +31,7 @@ export interface FleetSetupSpec {
   readonly folderName: string;
   readonly backupWitness: string;
   readonly hub: HubConfig;
+  readonly syncPolicy?: SyncPolicy;
   readonly authority: {
     readonly peerName: string;
     readonly root: string;
@@ -177,6 +184,7 @@ export async function setupPopulatedFleetV3(
       configPath: spec.authority.configPath,
       hub: spec.hub,
       backupWitness: spec.backupWitness,
+      syncPolicy: spec.syncPolicy ?? defaultSyncPolicy,
     })
   ).config;
   const prepared = [];
@@ -255,10 +263,13 @@ export function readFleetSetupSpec(path: string): FleetSetupSpec {
           } as const)
         : null;
   if (hubConfig === null) throw new Error("Fleet setup hub is invalid");
+  const syncPolicy = input.syncPolicy ?? defaultSyncPolicy;
+  validateSyncPolicy(syncPolicy);
   return {
     folderName: string(input.folderName, "folderName"),
     backupWitness: string(input.backupWitness, "backupWitness"),
     hub: hubConfig,
+    syncPolicy,
     authority: {
       peerName: string(authority.peerName, "authority.peerName"),
       root: string(authority.root, "authority.root"),
@@ -283,6 +294,7 @@ export function readFleetSetupSpec(path: string): FleetSetupSpec {
 }
 
 function validateFleetSpec(spec: FleetSetupSpec): void {
+  validateSyncPolicy(spec.syncPolicy ?? defaultSyncPolicy);
   if (spec.backupWitness.trim().length === 0)
     throw new Error("Fleet setup requires a verified backup witness");
   if (spec.targets.length === 0)

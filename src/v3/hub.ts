@@ -1,8 +1,12 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join, resolve } from "node:path";
 import { hashJson } from "../v2/hash.js";
-import { manifestObjectIds, validateNamespaceManifest } from "./catalog.js";
+import {
+  manifestObjectIds,
+  validateNamespaceManifest,
+  validateNamespacePolicy,
+} from "./catalog.js";
 import { signedConfigPayload, verifyConfig, verifyPayload } from "./config.js";
 import { ObjectStore, referencedObjects } from "./objects.js";
 import { deriveMutations } from "./mutations.js";
@@ -25,6 +29,7 @@ export class HubStore implements Disposable {
   public constructor(root: string) {
     this.root = resolve(root);
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
+    chmodSync(this.root, 0o700);
     this.database = new DatabaseSync(join(this.root, "hub.sqlite"));
     this.database.exec(
       "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
@@ -103,7 +108,7 @@ export class HubStore implements Disposable {
       row.snapshot_json === null
         ? null
         : (JSON.parse(String(row.snapshot_json)) as NamespaceManifest);
-    if (snapshot !== null) validateNamespaceManifest(snapshot);
+    if (snapshot !== null) validateNamespacePolicy(snapshot, config);
     return { sequence: Number(row.sequence), config, snapshot };
   }
 
@@ -207,6 +212,7 @@ export class HubStore implements Disposable {
       return Number(existing.sequence);
     }
     const checkpoint = this.checkpoint(input.snapshot.folderId);
+    validateNamespacePolicy(input.snapshot, checkpoint.config);
     if (input.baseSequence !== checkpoint.sequence)
       throw new Error("Snapshot compare-and-swap failed");
     const peer = checkpoint.config.peers.find(

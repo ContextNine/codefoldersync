@@ -1158,6 +1158,7 @@ test("AI workload records a large multi-directory mutation and replays it exactl
       ignoreDigest: "a".repeat(64),
       entries: [catalogEntry(nodeId)],
       gitBoundaries: [],
+      repositories: [],
       createdAt: "2026-08-30T00:00:00.000Z",
       digest: "0".repeat(64),
     });

@@ -6,7 +6,7 @@ The scanner uses `lstat`, locale-stable name ordering, root-relative containment
 
 An exact path retains node identity only when its local device/inode observation still matches; otherwise an unambiguous device/inode match infers a move. This prevents equal-size rename swaps from reusing stale content. After accepted materialization, a trusted checkpoint projection binds cross-machine paths to accepted node IDs. Unchanged observation metadata reuses the accepted manifest during routine scans. `verify --full`, source seal, target planning, approval revalidation, and post-apply verification force content hashing.
 
-`.codefoldersyncignore` is authority metadata rather than an ordinary event. `.codefoldersync` and `.workspace-sync` are hard exclusions. `.git` is diverted into Git-boundary capture.
+`.codefoldersyncignore` is authority metadata rather than an ordinary event. `.codefoldersync`, `.workspace-sync`, and Git metadata are excluded. The signed synchronization policy filters leaves before their contents are captured; required ancestors are retained without including their unselected children. See [Synchronization policies](sync-policies.md).
 
 ## Source seal
 
@@ -23,9 +23,9 @@ Apply performs:
 3. source object-closure download and digest verification;
 4. top-level target-only/divergent/type-conflict recovery moves;
 5. moved-equivalent binding when source placement is absent;
-6. journaled canonical directory, leaf, symlink, and Git materialization;
+6. journaled included directory, leaf, and symlink materialization, preserving local-only siblings;
 7. independent force scan against source node identity;
-8. semantic digest and Git verification;
+8. semantic digest and eligible Git-context verification;
 9. durable baseline and target-verification record.
 
 Any target change after approval causes a new-plan requirement. The authority peer is rejected before planning or apply.
@@ -43,7 +43,7 @@ The hub sequence, not timestamps, determines the canonical side. Checkpoint publ
 
 ## Apply ordering
 
-Normal apply force-revalidates that the local scan is still current. Moving roots first stage deep to shallow, then occupy destinations shallow to deep so rename cycles cannot overwrite one another. Obsolete top-level subtrees move to unique apply recovery. Desired directories materialize shallow to deep, followed by leaves. Git boundaries stage, `git fsck --full`, swap, and verify. The accepted snapshot and any normal conflicts publish atomically.
+Normal apply force-revalidates that the local scan is still current. Moving roots first stage deep to shallow, then occupy destinations shallow to deep so rename cycles cannot overwrite one another. Bulk subtree moves require every physical entry to be in scope. Otherwise only selected contents move to unique recovery, leaving local-only siblings and Git metadata in place. Desired directories materialize shallow to deep, followed by leaves. Default-branch apply rechecks repository context before touching live files. The accepted snapshot and any normal conflicts publish atomically.
 
 Existing bytes are never unlinked as the first destructive action. Cross-filesystem recovery is rejected during setup.
 

@@ -15,7 +15,9 @@ import type {
   HubConfig,
   ProductConfig,
   SyncSummary,
+  SyncPolicy,
 } from "./types.js";
+import { defaultSyncPolicy, validateSyncPolicy } from "./policy.js";
 
 export interface DistributedEndpoint {
   readonly kind: "local" | "ssh";
@@ -46,6 +48,7 @@ export interface DistributedFleetSpec {
   readonly backupWitness: string;
   readonly controllerStateDir: string;
   readonly hub: HubConfig;
+  readonly syncPolicy?: SyncPolicy;
   readonly authority: DistributedMachineSpec;
   readonly targets: readonly DistributedTargetSpec[];
 }
@@ -67,6 +70,7 @@ export interface DistributedExecutor {
       readonly folderName: string;
       readonly backupWitness: string;
       readonly hub: HubConfig;
+      readonly syncPolicy?: SyncPolicy;
     },
   ): Promise<ProductConfig>;
   prepareEnrollment(
@@ -174,6 +178,7 @@ export async function prepareDistributedSetupV3(
       folderName: spec.folderName,
       backupWitness: spec.backupWitness,
       hub: spec.hub,
+      syncPolicy: spec.syncPolicy ?? defaultSyncPolicy,
     });
     journal.acceptedAuthority = journal.authority;
     writeJournal(spec, journal);
@@ -469,6 +474,7 @@ function assertDistributedFleetSpec(
 }
 
 function validateDistributedFleetSpec(spec: DistributedFleetSpec): void {
+  validateSyncPolicy(spec.syncPolicy ?? defaultSyncPolicy);
   if (spec.schemaVersion !== 1)
     throw new Error("Distributed fleet specification schema is unsupported");
   safeId(spec.runId, "runId");

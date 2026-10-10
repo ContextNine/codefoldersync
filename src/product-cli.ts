@@ -82,6 +82,12 @@ import {
 } from "./v3/types.js";
 import { installedReleaseIdentity } from "./v3/release.js";
 import {
+  defaultSyncPolicy,
+  plaintextEnvPolicy,
+  validateSyncPolicy,
+} from "./v3/policy.js";
+import type { SyncPolicy } from "./v3/types.js";
+import {
   captureEncryptedBackup,
   captureStreamedEncryptedBackup,
   readEncryptedBackupCaptureSpec,
@@ -310,6 +316,7 @@ async function runSetup(commandArgs: readonly string[]): Promise<void> {
       peerName: option(commandArgs, "--peer") ?? hostname(),
       hub: parseHubSpec(hub, remoteCommand(commandArgs)),
       backupWitness,
+      syncPolicy: setupSyncPolicy(commandArgs),
       ...(stateDir === undefined ? {} : { stateDir }),
       ...(configPath === undefined ? {} : { configPath }),
     });
@@ -1134,6 +1141,35 @@ function requiredOption(args: readonly string[], name: string): string {
   return value;
 }
 
+function setupSyncPolicy(args: readonly string[]): SyncPolicy {
+  const mode = option(args, "--sync-policy");
+  let policy: SyncPolicy;
+  if (mode === "default-branch") {
+    policy = { mode, branch: requiredOption(args, "--default-branch") };
+  } else if (mode === "plaintext-env") {
+    if (!flag(args, "--allow-plaintext-env"))
+      throw new Error(
+        "Plaintext ENV transfer requires explicit --allow-plaintext-env",
+      );
+    policy = plaintextEnvPolicy;
+  } else if (mode === "selected-files") {
+    const includes = args.flatMap((value, index) =>
+      value === "--include"
+        ? [requiredOption(args.slice(index), "--include")]
+        : [],
+    );
+    policy = {
+      mode,
+      includes,
+      plaintextEnv: flag(args, "--allow-plaintext-env"),
+    };
+  } else if (mode === undefined) {
+    policy = defaultSyncPolicy;
+  } else throw new Error("Unknown setup synchronization policy");
+  validateSyncPolicy(policy);
+  return policy;
+}
+
 function option(args: readonly string[], name: string): string | undefined {
   const index = args.indexOf(name);
   if (index < 0) return undefined;
@@ -1330,6 +1366,9 @@ Commands:
   codefoldersync setup --mode distributed --spec <path> --approve-prepare
   codefoldersync setup --mode distributed --spec <path> --approve-target <machine-id> --adoption-id <id>
   codefoldersync setup --mode authority --root <path> --hub <path|ssh-url> --backup-witness <id>
+    --sync-policy default-branch --default-branch master
+    --sync-policy selected-files --include '.docs/**'
+    --sync-policy plaintext-env --allow-plaintext-env
   codefoldersync setup --mode request --accepted-config <path> --root <path> --state <path> --request <path>
   codefoldersync setup --mode enroll --config <authority-config> --request <path>
   codefoldersync setup --mode activate --accepted-config <path> --state <path> --request <path>

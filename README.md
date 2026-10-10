@@ -14,7 +14,7 @@ V3 is incompatible with V1 and V2. It uses schema and protocol version 3, a fres
 - Normal concurrent writes use the accepted hub checkpoint as the canonical side and preserve the other complete version under a `CODEFOLDERSYNC-CONFLICT` path.
 - File objects, manifests, event history, conflicts, and recovery are retained. Garbage collection is report-only.
 - Symlinks synchronize target text and are never followed.
-- Every contained `.git` boundary is captured and applied transactionally after `git fsck --full`. External Git directories stop setup or synchronization.
+- Git metadata remains local. The signed policy selects default-branch working files or an explicit file allowlist. Default-branch transfer requires matching branch and HEAD; external Git directories stop setup or synchronization. The new policy contract is in development and its [remaining acceptance gates](docs/sync-policies.md) must pass before daily-driver activation.
 - `.codefoldersync` and `.workspace-sync` are hard exclusions. `node_modules` is excluded by the generated default contract.
 
 ## Install

@@ -5,6 +5,24 @@ export type NodeKind = "directory" | "regular" | "symlink";
 export type LifecycleMode = "adoption" | "normal";
 export type PeerRole = "authority" | "peer" | "hub";
 
+export type SyncPolicy =
+  | {
+      readonly mode: "default-branch";
+      readonly branch: string;
+    }
+  | {
+      readonly mode: "selected-files";
+      readonly includes: readonly string[];
+      readonly plaintextEnv: boolean;
+    };
+
+export interface RepositoryContext {
+  readonly path: string;
+  readonly identity: string;
+  readonly branch: string | null;
+  readonly head: string | null;
+}
+
 export interface LocalHubConfig {
   readonly kind: "local";
   readonly path: string;
@@ -46,6 +64,7 @@ export interface UnsignedFolderConfig {
   readonly authority: AuthorityRecord;
   readonly peers: readonly PeerRecord[];
   readonly ignoreDigest: string;
+  readonly syncPolicy: SyncPolicy;
   readonly lifecycle: LifecycleMode;
   readonly backupWitness: string | null;
   readonly service?: {
@@ -127,6 +146,7 @@ export interface NamespaceManifest {
   readonly ignoreDigest: string;
   readonly entries: readonly CatalogEntry[];
   readonly gitBoundaries: readonly GitBoundary[];
+  readonly repositories: readonly RepositoryContext[];
   readonly createdAt: string;
   readonly digest: string;
 }

@@ -55,6 +55,7 @@ type AgentRequest =
       readonly folderName: string;
       readonly backupWitness: string;
       readonly hub: HubConfig;
+      readonly syncPolicy?: import("./types.js").SyncPolicy;
     }
   | {
       readonly action: "prepare-enrollment";
@@ -107,6 +108,7 @@ export class ProcessDistributedExecutor implements DistributedExecutor {
       readonly folderName: string;
       readonly backupWitness: string;
       readonly hub: HubConfig;
+      readonly syncPolicy?: import("./types.js").SyncPolicy;
     },
   ): Promise<ProductConfig> {
     return productConfig(
@@ -259,6 +261,9 @@ export async function runDistributedAgent(request: unknown): Promise<unknown> {
           folderName: input.folderName,
           backupWitness: input.backupWitness,
           hub: input.hub,
+          ...(input.syncPolicy === undefined
+            ? {}
+            : { syncPolicy: input.syncPolicy }),
         })
       ).config;
     case "prepare-enrollment": {

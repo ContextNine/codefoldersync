@@ -11,7 +11,7 @@ flowchart LR
   A["Recursive scanner and derived catalog"] --> P["Signed peer checkpoint"]
   P --> H["Local or SSH V3 hub"]
   H --> M["Three-way causal merge"]
-  M --> J["Journaled filesystem and Git apply"]
+  M --> J["Journaled selected working-file apply"]
   J --> A
   T["Populated target"] --> R["Adoption recovery"]
   R --> J
@@ -30,25 +30,26 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 7. The hub rejects a reused event ID with a changed payload.
 8. Target apply force-revalidates the local namespace before mutation.
 9. Symlinks are scanned with `lstat` and never followed.
-10. `.git` metadata applies as a complete staged and verified boundary.
+10. Git metadata stays machine-local; default-branch transfer requires matching repository and HEAD context.
 11. Reserved paths, traversal, aliases, mounts, external Git dirs, unsupported objects, corruption, and ambiguous state fail closed.
 12. Automatic object and recovery deletion remains disabled.
 
 ## Documentation map
 
-| Area                                  | Document                                              |
-| ------------------------------------- | ----------------------------------------------------- |
-| Components and ownership              | [Architecture](architecture.md)                       |
-| Types, manifests, SQLite, identity    | [Data model](data-model.md)                           |
-| Scan, merge, adoption, apply          | [Sync engine](sync-engine.md)                         |
-| Local and SSH framed RPC              | [Protocol](protocol.md)                               |
-| Outbox, journals, recovery, retention | [Durability and recovery](durability-and-recovery.md) |
-| Filesystem and trust policy           | [Safety model](safety-model.md)                       |
-| Visible and retained conflicts        | [Conflicts](conflicts.md)                             |
-| Setup, enrollment, services           | [Installation](installation.md)                       |
-| Operator workflow                     | [Operations](operations.md)                           |
-| Executable acceptance                 | [Acceptance scenarios](acceptance-scenarios.md)       |
-| Maintainer workflow                   | [Development](development.md)                         |
+| Area                                   | Document                                              |
+| -------------------------------------- | ----------------------------------------------------- |
+| Components and ownership               | [Architecture](architecture.md)                       |
+| Default-branch and selected-file scope | [Synchronization policies](sync-policies.md)          |
+| Types, manifests, SQLite, identity     | [Data model](data-model.md)                           |
+| Scan, merge, adoption, apply           | [Sync engine](sync-engine.md)                         |
+| Local and SSH framed RPC               | [Protocol](protocol.md)                               |
+| Outbox, journals, recovery, retention  | [Durability and recovery](durability-and-recovery.md) |
+| Filesystem and trust policy            | [Safety model](safety-model.md)                       |
+| Visible and retained conflicts         | [Conflicts](conflicts.md)                             |
+| Setup, enrollment, services            | [Installation](installation.md)                       |
+| Operator workflow                      | [Operations](operations.md)                           |
+| Executable acceptance                  | [Acceptance scenarios](acceptance-scenarios.md)       |
+| Maintainer workflow                    | [Development](development.md)                         |
 
 ## Source ownership
 

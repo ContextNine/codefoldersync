@@ -12,11 +12,17 @@ import {
 } from "./objects.js";
 import { normalizeRelativePath, portableName } from "./paths.js";
 import {
+  inspectRepositoryContext,
+  policyIncludes,
+  compileInclude,
+} from "./policy.js";
+import {
   schemaVersion,
   type CatalogEntry,
   type GitBoundary,
   type NamespaceManifest,
   type ProductConfig,
+  type RepositoryContext,
 } from "./types.js";
 
 export interface ScanResult {
@@ -43,6 +49,15 @@ export function scanNamespace(
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
     throw new Error("Configured root must be a physical directory");
   const byPath = new Map(baseline.map((entry) => [entry.path, entry]));
+  const baselineParents = new Set(baseline.map((entry) => entry.parentPath));
+  const logicalEmptyDirectories = new Set(
+    baseline
+      .filter(
+        (entry) =>
+          entry.kind === "directory" && !baselineParents.has(entry.path),
+      )
+      .map((entry) => entry.path),
+  );
   const byIdentity = new Map<string, CatalogEntry[]>();
   for (const entry of baseline) {
     const key = `${entry.device}:${entry.inode}`;
@@ -54,11 +69,54 @@ export function scanNamespace(
   const entries: CatalogEntry[] = [];
   const nodeByPath = new Map<string, string>();
   const gitBoundaries: GitBoundary[] = [];
+  const repositories: RepositoryContext[] = [];
   const objectIds = new Set<string>();
   let reusedFiles = 0;
   let capturedFiles = 0;
+  const metadataPaths = new Set<string>();
+  const contexts = new Map<string, RepositoryContext>();
+  const discover = (directory: string, relativeDirectory: string): void => {
+    if (existsSync(join(directory, ".git"))) {
+      contexts.set(
+        relativeDirectory,
+        inspectRepositoryContext(root, relativeDirectory, (paths) => {
+          for (const path of paths) metadataPaths.add(path);
+        }),
+      );
+    }
+    for (const child of readdirSync(directory, { withFileTypes: true })) {
+      if (
+        !child.isDirectory() ||
+        child.isSymbolicLink() ||
+        child.name === ".git"
+      )
+        continue;
+      const path = relativeDirectory
+        ? `${relativeDirectory}/${child.name}`
+        : child.name;
+      const target = join(directory, child.name);
+      if (metadataPaths.has(target) || ignore.ignores(path, true)) continue;
+      if (lstatSync(target).dev !== rootStat.dev)
+        throw new Error(`Nested mount is unsupported: ${path}`);
+      discover(target, path);
+    }
+  };
+  discover(root, "");
 
   const walk = (directory: string, relativeDirectory: string) => {
+    const context = contexts.get(relativeDirectory);
+    if (context !== undefined) {
+      if (config.syncPolicy.mode === "default-branch") {
+        if (
+          context.branch !== config.syncPolicy.branch ||
+          context.head === null
+        )
+          throw new Error(
+            "Repository is not on the configured default branch; synchronization is paused",
+          );
+        repositories.push(context);
+      }
+    }
     const names = new Set<string>();
     for (const directoryEntry of readdirSync(directory, {
       withFileTypes: true,
@@ -69,6 +127,7 @@ export function scanNamespace(
       normalizeRelativePath(path);
       if (path === ".codefoldersyncignore") continue;
       const target = join(directory, directoryEntry.name);
+      if (metadataPaths.has(target)) continue;
       const stat = lstatSync(target);
       const directoryKind = stat.isDirectory() && !stat.isSymbolicLink();
       if (ignore.ignores(path, directoryKind)) continue;
@@ -81,11 +140,9 @@ export function scanNamespace(
       if (stat.dev !== rootStat.dev)
         throw new Error(`Nested mount is unsupported: ${path}`);
       if (directoryEntry.name === ".git") {
-        gitBoundaries.push(
-          captureGitBoundary(root, directory, target, path, store, objectIds),
-        );
         continue;
       }
+      if (!directoryKind && !policyIncludes(config.syncPolicy, path)) continue;
       const exact = byPath.get(path);
       const identities = byIdentity.get(`${stat.dev}:${stat.ino}`) ?? [];
       const moved = identities.find((entry) => !claimed.has(entry.nodeId));
@@ -155,18 +212,52 @@ export function scanNamespace(
     }
   };
   walk(root, "");
-  entries.sort((left, right) => left.path.localeCompare(right.path, "en"));
+  const includedLeaves = entries.filter((entry) => entry.kind !== "directory");
+  const includedParents = new Set<string>();
+  for (const entry of includedLeaves) {
+    let parent = entry.parentPath;
+    while (parent !== null) {
+      includedParents.add(parent);
+      const next = dirname(parent);
+      parent = next === "." ? null : next;
+    }
+  }
+  const selectedPolicy = config.syncPolicy;
+  const includedEntries = entries.filter(
+    (entry) =>
+      entry.kind !== "directory" ||
+      includedParents.has(entry.path) ||
+      ((selectedPolicy.mode === "default-branch" ||
+        selectedPolicy.includes.some((pattern) => {
+          const expression = compileInclude(pattern);
+          return (
+            expression.test(entry.path) || expression.test(`${entry.path}/`)
+          );
+        })) &&
+        (readdirSync(join(root, entry.path)).length === 0 ||
+          logicalEmptyDirectories.has(entry.path))),
+  );
+  includedEntries.sort((left, right) =>
+    left.path.localeCompare(right.path, "en"),
+  );
   gitBoundaries.sort((left, right) =>
     left.worktreePath.localeCompare(right.worktreePath, "en"),
   );
-  const digest = semanticDigest(entries, gitBoundaries, ignore.digest);
+  repositories.sort((left, right) => left.path.localeCompare(right.path, "en"));
+  const digest = semanticDigest(
+    includedEntries,
+    gitBoundaries,
+    ignore.digest,
+    repositories,
+  );
   return {
     manifest: {
       schemaVersion,
       folderId: config.folderId,
       ignoreDigest: ignore.digest,
-      entries,
+      entries: includedEntries,
       gitBoundaries,
+      repositories,
       createdAt: new Date().toISOString(),
       digest,
     },
@@ -180,9 +271,11 @@ export function semanticDigest(
   entries: readonly CatalogEntry[],
   gitBoundaries: readonly GitBoundary[],
   ignoreDigest: string,
+  repositories: readonly RepositoryContext[] = [],
 ): string {
   return hashJson({
     ignoreDigest,
+    repositories,
     entries: entries.map((entry) => ({
       path: entry.path,
       nodeId: entry.nodeId,
@@ -204,6 +297,21 @@ export function semanticDigest(
 export function validateNamespaceManifest(manifest: NamespaceManifest): void {
   if (manifest.schemaVersion !== schemaVersion)
     throw new Error("Snapshot is not CodeFolderSync V3");
+  if (!Array.isArray(manifest.repositories))
+    throw new Error("Snapshot has no repository context contract");
+  const repositoryPaths = new Set<string>();
+  for (const repository of manifest.repositories) {
+    if (repository.path !== "") normalizeRelativePath(repository.path);
+    assertHash(repository.identity, "Repository identity");
+    if (
+      repositoryPaths.has(repository.path) ||
+      (repository.branch !== null && typeof repository.branch !== "string") ||
+      (repository.head !== null &&
+        !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(repository.head))
+    )
+      throw new Error("Snapshot repository context is invalid");
+    repositoryPaths.add(repository.path);
+  }
   const paths = new Set<string>();
   const nodes = new Set<string>();
   const aliases = new Set<string>();
@@ -276,9 +384,55 @@ export function validateNamespaceManifest(manifest: NamespaceManifest): void {
       manifest.entries,
       manifest.gitBoundaries,
       manifest.ignoreDigest,
+      manifest.repositories,
     ) !== manifest.digest
   )
     throw new Error("Snapshot semantic digest is invalid");
+}
+
+export function validateNamespacePolicy(
+  manifest: NamespaceManifest,
+  config: ProductConfig,
+): void {
+  validateNamespaceManifest(manifest);
+  const leaves = manifest.entries.filter((entry) => entry.kind !== "directory");
+  for (const entry of manifest.entries) {
+    if (
+      !policyIncludes(config.syncPolicy, entry.path) &&
+      !(
+        entry.kind === "directory" &&
+        leaves.some(
+          (leaf) =>
+            leaf.path.startsWith(`${entry.path}/`) &&
+            policyIncludes(config.syncPolicy, leaf.path),
+        )
+      )
+    )
+      throw new Error(
+        "Snapshot contains a path outside the signed synchronization policy",
+      );
+  }
+  if (manifest.gitBoundaries.length !== 0)
+    throw new Error(
+      "Git metadata is not part of either synchronization policy",
+    );
+  if (
+    config.syncPolicy.mode === "selected-files" &&
+    manifest.repositories.length !== 0
+  )
+    throw new Error("Selected-files snapshots must not couple local Git state");
+  if (config.syncPolicy.mode === "default-branch") {
+    const branch = config.syncPolicy.branch;
+    if (
+      manifest.repositories.some(
+        (repository) =>
+          repository.branch !== branch || repository.head === null,
+      )
+    )
+      throw new Error(
+        "Default-branch snapshot contains an ineligible repository",
+      );
+  }
 }
 
 export function manifestObjectIds(

@@ -4,6 +4,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmdirSync,
@@ -24,6 +25,7 @@ import {
   scanNamespace,
   semanticDigest,
   validateNamespaceManifest,
+  validateNamespacePolicy,
   type ScanResult,
 } from "./catalog.js";
 import {
@@ -71,6 +73,11 @@ import {
   type TreeManifest,
   type TreeManifestEntry,
 } from "./types.js";
+import {
+  assertMatchingRepositoryContext,
+  inspectRepositoryContext,
+  isPlaintextEnvPath,
+} from "./policy.js";
 
 export type AdoptionFaultPoint =
   | "after-apply-journal"
@@ -224,6 +231,7 @@ export async function planAdoptionV3(
   const checkpoint = await transport.checkpoint(config.folderId);
   assertAcceptedConfig(config, checkpoint);
   if (checkpoint.snapshot === null) throw new Error("Source is not sealed");
+  assertRepositoryContexts(config, target.manifest, checkpoint.snapshot);
   const differences = classifyAdoption(checkpoint.snapshot, target.manifest);
   const summaryCounts = emptyAdoptionSummary();
   for (const difference of differences)
@@ -475,6 +483,12 @@ export async function syncFolderV3(
     await using transport = await HubTransport.connectForPeer(config);
     let checkpoint = await transport.checkpoint(config.folderId);
     assertAcceptedConfig(config, checkpoint);
+    if (checkpoint.snapshot !== null)
+      assertRepositoryContexts(config, local.manifest, checkpoint.snapshot);
+    for (const record of state.outbox()) {
+      const pending = record.value as SignedSnapshot;
+      assertRepositoryContexts(config, local.manifest, pending.snapshot);
+    }
     checkpoint = await resumeOutbox(state, objects, transport, checkpoint);
     importPublishedConflicts(
       state,
@@ -574,6 +588,7 @@ export async function syncFolderV3(
       conflicts = merged.conflicts;
     }
     desired = reattachRestoredNodes(desired, checkpoint.snapshot, state);
+    assertRepositoryContexts(config, local.manifest, desired);
     const required = new Set(manifestObjectIds(desired, objects));
     for (const conflict of conflicts)
       if (conflict.manifestId !== null)
@@ -1426,8 +1441,8 @@ async function preserveAdoptionDifferences(
     const manifestId =
       existingConflict?.manifestId ??
       gitBoundary?.manifestId ??
-      (pathExists(evidencePath) && lstatSync(evidencePath).isDirectory()
-        ? captureTree(evidencePath, objects).manifestId
+      (entry?.kind === "directory"
+        ? captureSnapshotSubtree(entry, plan.targetSnapshot, objects)
         : (entry?.manifestId ?? null));
     const conflict: ConflictRecord = {
       conflictId,
@@ -1465,7 +1480,14 @@ async function preserveAdoptionDifferences(
         throw new Error(
           `Adoption target evidence is missing after canonical apply: ${difference.path}`,
         );
-      moveWithJournal(state, live, recovery, "adoption-recovery");
+      moveScopedWithJournal(
+        config,
+        state,
+        live,
+        recovery,
+        "adoption-recovery",
+        plan.targetSnapshot,
+      );
       options.fault?.("after-recovery-move", difference.path);
     }
     if (!pathExists(recovery))
@@ -1815,7 +1837,20 @@ async function applySnapshot(
   acceptedSequence = 0,
   options: SyncFolderOptions = {},
 ): Promise<string | null> {
-  validateNamespaceManifest(desired);
+  validateNamespacePolicy(desired, config);
+  assertRepositoryContexts(config, current, desired);
+  for (const entry of desired.entries) {
+    if (entry.kind === "directory") continue;
+    const target = safeTarget(config.root, entry.path);
+    if (
+      pathExists(target) &&
+      lstatSync(target).isDirectory() &&
+      !directoryFullyIncluded(config, entry.path, current)
+    )
+      throw new Error(
+        "A selected file would replace a directory containing local-only data",
+      );
+  }
   const journalId =
     recoveryKind === "normal" ? `snapshot-apply:${desired.digest}` : null;
   const existingJournal =
@@ -1889,6 +1924,11 @@ async function applySnapshot(
         value.from !== undefined && value.from.path !== value.to.path,
     )
     .filter(
+      (move) =>
+        move.from.kind !== "directory" ||
+        directoryFullyIncluded(config, move.from.path, current),
+    )
+    .filter(
       (move, _index, values) =>
         !values.some(
           (parent) =>
@@ -1924,11 +1964,13 @@ async function applySnapshot(
   for (const entry of obsolete) {
     const live = safeTarget(config.root, entry.path);
     if (!pathExists(live)) continue;
-    moveWithJournal(
+    moveScopedWithJournal(
+      config,
       state,
       live,
       safeRecoveryTarget(recoveryRoot, entry.path),
       "apply-recovery",
+      current,
     );
   }
   options.fault?.("after-obsolete-recovery");
@@ -1993,6 +2035,7 @@ async function applySnapshot(
       throw new Error(`Desired leaf has no manifest: ${entry.path}`);
     const stage = join(config.stateDir, "staging", randomUUID());
     materializeManifest(entry.manifestId, stage, objects);
+    if (isPlaintextEnvPath(entry.path)) chmodSync(stage, 0o600);
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     renameSync(stage, target);
   }
@@ -2303,8 +2346,14 @@ function mergeSnapshots(
       ignoreDigest: config.ignoreDigest,
       entries,
       gitBoundaries,
+      repositories: local.repositories,
       createdAt: new Date().toISOString(),
-      digest: semanticDigest(entries, gitBoundaries, config.ignoreDigest),
+      digest: semanticDigest(
+        entries,
+        gitBoundaries,
+        config.ignoreDigest,
+        local.repositories,
+      ),
     },
     conflicts,
   };
@@ -2610,6 +2659,11 @@ function recoverInterruptedApplies(
   state: LocalState,
 ): void {
   for (const journal of state.journals()) {
+    if (journal.kind !== "snapshot-apply") continue;
+    const pending = snapshotApplyJournal(journal.value);
+    assertRepositoryContexts(config, pending.current, pending.desired);
+  }
+  for (const journal of state.journals()) {
     if (
       journal.kind === "adoption-apply" ||
       journal.kind === "snapshot-apply" ||
@@ -2669,6 +2723,63 @@ function moveWithJournal(
   state.completeJournal(id);
 }
 
+/** A subtree rename is allowed only when it contains no local-only entries. */
+function directoryFullyIncluded(
+  config: ProductConfig,
+  path: string,
+  snapshot: NamespaceManifest,
+): boolean {
+  const included = new Set(snapshot.entries.map((entry) => entry.path));
+  const walk = (directory: string, relativeDirectory: string): boolean => {
+    for (const child of readdirSync(directory, { withFileTypes: true })) {
+      const relativePath = `${relativeDirectory}/${child.name}`;
+      if (!included.has(relativePath)) return false;
+      if (
+        child.isDirectory() &&
+        !child.isSymbolicLink() &&
+        !walk(join(directory, child.name), relativePath)
+      )
+        return false;
+    }
+    return true;
+  };
+  const source = safeTarget(config.root, path);
+  return !pathExists(source) || walk(source, path);
+}
+
+/** Recover selected contents without moving an excluded sibling or Git tree. */
+function moveScopedWithJournal(
+  config: ProductConfig,
+  state: LocalState,
+  source: string,
+  destination: string,
+  kind: string,
+  snapshot: NamespaceManifest,
+): void {
+  const path = relative(config.root, source).replaceAll(sep, "/");
+  if (
+    !lstatSync(source).isDirectory() ||
+    directoryFullyIncluded(config, path, snapshot)
+  ) {
+    moveWithJournal(state, source, destination, kind);
+    return;
+  }
+  mkdirSync(destination, { recursive: true, mode: 0o700 });
+  const included = new Set(snapshot.entries.map((entry) => entry.path));
+  for (const child of readdirSync(source, { withFileTypes: true })) {
+    if (!included.has(`${path}/${child.name}`)) continue;
+    moveScopedWithJournal(
+      config,
+      state,
+      join(source, child.name),
+      join(destination, child.name),
+      kind,
+      snapshot,
+    );
+  }
+  if (readdirSync(source).length === 0) rmdirSync(source);
+}
+
 function safeRecoveryTarget(root: string, path: string): string {
   const target = resolve(root, ...path.split("/"));
   const absolute = resolve(root);
@@ -2708,6 +2819,30 @@ function assertAcceptedConfig(
     throw new Error(
       "Local configuration projection differs from hub authority",
     );
+}
+
+function assertRepositoryContexts(
+  config: ProductConfig,
+  current: NamespaceManifest,
+  desired: NamespaceManifest,
+): void {
+  if (config.syncPolicy.mode !== "default-branch") return;
+  if (current.repositories.length !== desired.repositories.length)
+    throw new Error("Repository scope differs; synchronization is paused");
+  const localByPath = new Map(
+    current.repositories.map((repository) => [repository.path, repository]),
+  );
+  for (const accepted of desired.repositories) {
+    const local = localByPath.get(accepted.path);
+    if (local === undefined)
+      throw new Error("Repository scope differs; synchronization is paused");
+    assertMatchingRepositoryContext(config.syncPolicy, local, accepted);
+    assertMatchingRepositoryContext(
+      config.syncPolicy,
+      inspectRepositoryContext(config.root, local.path),
+      local,
+    );
+  }
 }
 
 function saveBaseline(

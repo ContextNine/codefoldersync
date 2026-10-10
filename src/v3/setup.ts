@@ -32,6 +32,8 @@ import { defaultIgnore } from "./ignore.js";
 import { HubTransport } from "./transport.js";
 import { LocalState } from "./state.js";
 import type { HubConfig, ProductConfig } from "./types.js";
+import type { SyncPolicy } from "./types.js";
+import { defaultSyncPolicy } from "./policy.js";
 
 export type AuthoritySetupFaultPoint =
   "after-authority-projection" | "after-folder-creation";
@@ -66,6 +68,7 @@ export interface AuthoritySetupInput {
   readonly configPath?: string;
   readonly hub: HubConfig;
   readonly backupWitness?: string;
+  readonly syncPolicy?: SyncPolicy;
 }
 
 export async function setupAuthorityV3(
@@ -92,6 +95,8 @@ export async function setupAuthorityV3(
     config.folderName !== input.folderName ||
     config.peerName !== input.peerName ||
     canonicalJson(config.hub) !== canonicalJson(input.hub) ||
+    canonicalJson(config.syncPolicy) !==
+      canonicalJson(input.syncPolicy ?? defaultSyncPolicy) ||
     config.backupWitness !== (input.backupWitness ?? null)
   )
     throw new Error("Existing authority setup does not match this request");
