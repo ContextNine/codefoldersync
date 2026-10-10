@@ -44,6 +44,16 @@ One persistent SSH subprocess serializes request/response pairs. The hub path is
 
 Unknown operations fail explicitly.
 
+## Distributed adoption preview
+
+The setup agent has a separate bounded JSON response channel. Its adoption preview
+contains the plan identity, source sequence, source and target digests, timestamp,
+and classification counts. The controller records this preview in its setup
+journal. Complete differences and the captured target snapshot stay in the
+encrypted target-local plan; apply uses that exact plan ID and revalidates the
+target. Preview size does not grow with the number of captured paths. The agent
+response limit remains 64 MiB.
+
 ## Commit order and retry
 
 The client persists the exact signed snapshot, peer sequence, deterministic mutation list, embedded normal conflicts, and object closure in its outbox before transport. Objects commit on the hub before metadata. The hub verifies the peer signature, requires the peer sequence to advance, independently derives the expected mutations from the accepted checkpoint, validates their immutable object closure, then commits the checkpoint, event evidence, and conflicts atomically. Peer-sequence gaps are allowed because a stale queued proposal can be discarded after another peer advances the global checkpoint; reuse or regression is rejected. A lost acknowledgement leaves the outbox intact.

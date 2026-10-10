@@ -30,7 +30,10 @@ import {
   runAiWriter,
   snapshotAiWorkspace,
 } from "../src/v3/ai-workload.js";
-import type { DistributedFleetSpec } from "../src/v3/distributed.js";
+import type {
+  DistributedAdoptionPlan,
+  DistributedFleetSpec,
+} from "../src/v3/distributed.js";
 import {
   applyDistributedTargetV3,
   cutoverDistributedAcceptanceV3,
@@ -159,6 +162,35 @@ test("distributed setup previews, prepares, resumes, and applies one approved ta
     assert.equal(preparation.prepared, true);
     assert.equal(preparation.cutoverReady, false);
     assert.equal(preparation.targets.length, 2);
+    const journal = JSON.parse(
+      readFileSync(join(base, "controller", "distributed-setup.json"), "utf8"),
+    ) as { readonly plans: Readonly<Record<string, DistributedAdoptionPlan>> };
+    for (const target of preparation.targets) {
+      const preview = journal.plans[target.machineId];
+      assert.ok(preview);
+      assert.equal(preview.adoptionId, target.adoptionId);
+      assert.ok(preview.summary.divergent > 0);
+      assert.match(preview.sourceDigest, /^[a-f0-9]{64}$/u);
+      assert.match(preview.targetDigest, /^[a-f0-9]{64}$/u);
+      assert.ok(Buffer.byteLength(JSON.stringify(preview)) < 2048);
+      const encrypted = JSON.parse(
+        readFileSync(
+          join(
+            base,
+            target.machineId,
+            "state",
+            "plans",
+            `${target.adoptionId}.json`,
+          ),
+          "utf8",
+        ),
+      ) as { readonly version: number; readonly ciphertext: string };
+      assert.equal(encrypted.version, 1);
+      assert.ok(
+        Buffer.from(encrypted.ciphertext, "base64").length >
+          Buffer.byteLength(JSON.stringify(preview)),
+      );
+    }
 
     const resumed = run(["--approve-prepare"]);
     assert.equal(resumed.status, 0, resumed.stderr);

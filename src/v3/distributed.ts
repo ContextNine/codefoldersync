@@ -60,6 +60,12 @@ export interface DistributedBuildIdentity {
   readonly releaseSha256: string | null;
 }
 
+/** Detailed differences and snapshots stay in the encrypted target-local plan. */
+export type DistributedAdoptionPlan = Omit<
+  AdoptionPlan,
+  "differences" | "targetSnapshot"
+>;
+
 /** Machine operations are kept behind this boundary so the controller can be
  * tested through process-isolated agents before it is allowed to use SSH. */
 export interface DistributedExecutor {
@@ -94,7 +100,7 @@ export interface DistributedExecutor {
     machine: DistributedTargetSpec,
     config: ProductConfig,
     adoptionId: string,
-  ): Promise<AdoptionPlan>;
+  ): Promise<DistributedAdoptionPlan>;
   applyAdoption(
     machine: DistributedTargetSpec,
     config: ProductConfig,
@@ -120,7 +126,7 @@ interface DistributedJournal {
   activated: Record<string, ProductConfig>;
   sourceSeal: SyncSummary | null;
   adoptionIds: Record<string, string>;
-  plans: Record<string, AdoptionPlan>;
+  plans: Record<string, DistributedAdoptionPlan>;
   applied: Record<string, SyncSummary>;
   verified: Record<string, SyncSummary>;
   cutover: ProductConfig | null;

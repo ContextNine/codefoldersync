@@ -17,6 +17,7 @@ import {
 } from "./engine.js";
 import {
   type DistributedBuildIdentity,
+  type DistributedAdoptionPlan,
   type DistributedExecutor,
   type DistributedMachineSpec,
   type DistributedTargetSpec,
@@ -32,7 +33,6 @@ import {
 import {
   protocolVersion,
   schemaVersion,
-  type AdoptionPlan,
   type HubConfig,
   type ProductConfig,
   type SyncSummary,
@@ -186,7 +186,7 @@ export class ProcessDistributedExecutor implements DistributedExecutor {
     machine: DistributedTargetSpec,
     config: ProductConfig,
     adoptionId: string,
-  ): Promise<AdoptionPlan> {
+  ): Promise<DistributedAdoptionPlan> {
     return adoptionPlan(
       await callAgent(machine, {
         action: "plan-adoption",
@@ -316,7 +316,20 @@ export async function runDistributedAgent(request: unknown): Promise<unknown> {
     }
     case "plan-adoption": {
       const config = expectedLocalConfig(input.configPath, input.expected);
-      return planAdoptionV3(config, { adoptionId: input.adoptionId });
+      const plan = await planAdoptionV3(config, {
+        adoptionId: input.adoptionId,
+      });
+      return {
+        schemaVersion: plan.schemaVersion,
+        adoptionId: plan.adoptionId,
+        folderId: plan.folderId,
+        sourceSequence: plan.sourceSequence,
+        sourceDigest: plan.sourceDigest,
+        targetPeerId: plan.targetPeerId,
+        targetDigest: plan.targetDigest,
+        createdAt: plan.createdAt,
+        summary: plan.summary,
+      } satisfies DistributedAdoptionPlan;
     }
     case "apply-adoption": {
       const config = expectedLocalConfig(input.configPath, input.expected);
@@ -508,15 +521,49 @@ function enrollmentRequest(value: unknown): PeerEnrollmentRequest {
   return value as PeerEnrollmentRequest;
 }
 
-function adoptionPlan(value: unknown): AdoptionPlan {
+function adoptionPlan(value: unknown): DistributedAdoptionPlan {
   const record = object(value, "adoption plan");
   if (
     typeof record.adoptionId !== "string" ||
     typeof record.folderId !== "string" ||
-    typeof record.targetPeerId !== "string"
+    typeof record.targetPeerId !== "string" ||
+    record.schemaVersion !== schemaVersion ||
+    typeof record.sourceSequence !== "number" ||
+    !Number.isSafeInteger(record.sourceSequence) ||
+    record.sourceSequence < 1 ||
+    typeof record.sourceDigest !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record.sourceDigest) ||
+    typeof record.targetDigest !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(record.targetDigest) ||
+    typeof record.createdAt !== "string"
   )
     throw new Error("Distributed adoption plan is invalid");
-  return value as AdoptionPlan;
+  const summary = object(record.summary, "adoption summary");
+  const count = (key: string): number => {
+    const value = summary[key];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+      throw new Error("Distributed adoption classification count is invalid");
+    return value;
+  };
+  return {
+    schemaVersion,
+    adoptionId: record.adoptionId,
+    folderId: record.folderId,
+    sourceSequence: record.sourceSequence,
+    sourceDigest: record.sourceDigest,
+    targetPeerId: record.targetPeerId,
+    targetDigest: record.targetDigest,
+    createdAt: record.createdAt,
+    summary: {
+      exact: count("exact"),
+      "source-only": count("source-only"),
+      "target-only": count("target-only"),
+      divergent: count("divergent"),
+      "moved-equivalent": count("moved-equivalent"),
+      "type-conflicting": count("type-conflicting"),
+      unrepresentable: count("unrepresentable"),
+    },
+  };
 }
 
 function syncSummary(value: unknown): SyncSummary {

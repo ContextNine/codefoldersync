@@ -42,7 +42,7 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 | Default-branch and selected-file scope | [Synchronization policies](sync-policies.md)          |
 | Types, manifests, SQLite, identity     | [Data model](data-model.md)                           |
 | Scan, merge, adoption, apply           | [Sync engine](sync-engine.md)                         |
-| Local and SSH framed RPC               | [Protocol](protocol.md)                               |
+| Hub framing and distributed previews   | [Protocol](protocol.md)                               |
 | Outbox, journals, recovery, retention  | [Durability and recovery](durability-and-recovery.md) |
 | Filesystem and trust policy            | [Safety model](safety-model.md)                       |
 | Visible and retained conflicts         | [Conflicts](conflicts.md)                             |
