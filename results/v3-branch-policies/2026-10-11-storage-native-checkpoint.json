@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "scope": "source-and-storage-capability-checkpoint",
+  "candidate": {
+    "sourceCommit": "edc65c9fc1c2d1c94b2f56a2d1297a2af91ecff7",
+    "version": "0.3.0",
+    "archiveSha256": "1294dcbf9e76557810566aa1c050c0929c7b2c91db44537944e9bd13e913d285",
+    "independentBuilds": 2,
+    "archivesByteIdentical": true,
+    "published": false,
+    "dailyDriverInstalled": false
+  },
+  "sourceChecks": {
+    "format": true,
+    "types": true,
+    "build": true,
+    "testsPassed": 58,
+    "testsFailed": 0,
+    "testsSkipped": 0,
+    "priorGeneratedModuleInstallerFailure": true,
+    "focusedDurabilityRepeatPassed": true,
+    "fullRepeatPassed": true
+  },
+  "storageCapability": {
+    "machineId": "wootbook",
+    "privateMountNamespace": true,
+    "compressedReadOnlyLower": true,
+    "independentFullFixtureViews": true,
+    "metadataOnlyCopyUp": true,
+    "unprivilegedWrites": true,
+    "sameFilesystemWorkspaceAndState": true,
+    "unchangedOriginalFixture": true,
+    "viewsUnmounted": true,
+    "exactFixtureCleaned": true,
+    "usesOriginalArchiveCorpus": false,
+    "provesFullDataBudget": false
+  },
+  "nativeCandidate": {
+    "machineId": "workermacair",
+    "archiveDigestMatched": true,
+    "installedIdentityMatched": true,
+    "allocatedBytes": 2566464,
+    "removedAllocatedBytes": 2566464,
+    "exactTemporaryRunCleaned": true,
+    "servicesChanged": false,
+    "dailyDriverChanged": false,
+    "fullNativeFleetAcceptance": false
+  },
+  "mattbookNativePreflight": {
+    "sshConnected": false,
+    "failure": "connection-timeout",
+    "attemptExited": true,
+    "candidateStaged": false
+  },
+  "originalBackups": {
+    "snapshotId": "codefoldersync-backup-20260825T102132Z",
+    "allLocalCiphertextHashesMatched": true,
+    "allLocalOriginalsAgeAuthenticated": true,
+    "allLocalOriginalsZstandardIntegrityPassed": true,
+    "plaintextFilesWrittenByIntegrityChecks": false,
+    "workermacairDriveDownloadedContentCheckPassed": true,
+    "workermacairDriveBundleBytes": 6626657240,
+    "mattbookUploadState": "in-progress",
+    "wootbookUploadStarted": false,
+    "oldMastersRetired": false,
+    "fullDriveRestoreAcceptance": false
+  },
+  "completion": {
+    "completeOriginalArchiveAcceptance": false,
+    "completeImpressionStress": false,
+    "completeVerascientStress": false,
+    "finalReleaseAccepted": false,
+    "goalComplete": false
+  }
+}
