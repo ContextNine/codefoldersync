@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "3e03aa0008c5923f628cbbe0d7d6bdb86134e6c8",
+  "candidate": {
+    "archiveSha256": "61e7b399ce9df2a640d8e06382c7d39414c437249f708615637aa922f0867ea7",
+    "independentRebuildByteComparison": true,
+    "acceptedRelease": false
+  },
+  "sourceCheck": {
+    "format": true,
+    "types": true,
+    "build": true,
+    "tests": 58,
+    "passed": 58,
+    "failed": 0,
+    "skipped": 0
+  },
+  "historicalControllerFixture": {
+    "publicFixtureOnly": true,
+    "completeEncryptedSourceTrees": 3,
+    "fullHistoricalWitnessComparisons": true,
+    "outsideNamespaceDownloader": true,
+    "sequentialCiphertextSlotCleanup": true,
+    "boundedImageDuringDownloadAndRestore": true,
+    "preRunOwnedImageAndLoopResize": true,
+    "exactPackagedCandidateInstall": true,
+    "mandatoryReflinksAndPreseededObjects": true,
+    "freshConvergedRepetitions": 2,
+    "unchangedMasters": true,
+    "corruptedFreshDownloadRejectedAndCleaned": true,
+    "originalFixtureCiphertextUnchanged": true,
+    "volumeUnmountedAndRemoved": true,
+    "allocationLimitBytes": 536870912,
+    "acceptanceCorpus": false,
+    "initialNoncanonicalExecutablePreflightFailures": 2
+  },
+  "originalBackupState": {
+    "allLocalOriginalCiphertextHashesVerified": true,
+    "allLocalOriginalAgeAuthenticationAndZstdIntegrityVerified": true,
+    "workerMacAirDriveDownloadedContentVerified": true,
+    "mattbookDriveDownloadedContentCheck": "in-progress",
+    "wootbookUpload": "not-started",
+    "oldDerivedMastersRetired": false,
+    "privateControllerInputPreparedWithRemainingGatesFalse": true,
+    "bulkRunStarted": false
+  },
+  "completion": {
+    "historicalDriveFullTreeRestores": false,
+    "completeOriginalArchiveCampaign": false,
+    "completeImpressionStress": false,
+    "completeVerascientStress": false,
+    "allNativeFleetGates": false,
+    "releaseAndPilot": false,
+    "goalComplete": false
+  }
+}
