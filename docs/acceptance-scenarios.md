@@ -63,6 +63,9 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - `test/real-ssh-response-loss.ts` drives a strict canonical SSH route through a sentinel-qualified remote wrapper that closes the first completed setup response, then requires exact identity reuse, clean seal, and clean verification;
 - pseudo-fleet acceptance creates two fresh fleets with new roots, identities, hubs, and controller state;
 - both repetitions copy the same witnessed masters, apply the same deterministic 64-file cassette, and require exact final semantic digests;
+- pseudo-fleet cutover, peer activation, normal sync, and full verification use the pinned packaged peer processes, each with a private run-local HOME and XDG directories and no global/system Git configuration;
+- every pseudo-fleet peer then performs a no-change sync that must publish nothing and transfer zero objects; any offline or inconclusive target verification fails the repetition even when its captured digest matches;
+- each peer's force verification must bind to the same accepted checkpoint sequence and digest; the coordinator reads only that checkpoint rather than rescanning workspaces with its own Git environment;
 - the AI workload requires at least 50 changed TypeScript files across eight directories, verifies required create, move, and delete behavior, records a private cassette, and replays it to the same final digest;
 - the Linux durability lane injects real `ENOSPC` write and `EIO` fsync results below materialization staging, requires an inconclusive result with retained prior bytes, then retries to clean full verification;
 - the Linux watcher lane freezes the daemon, proves `IN_Q_OVERFLOW` with a separate native watcher, writes the included marker after saturation, and requires the scheduled full scan to publish it;

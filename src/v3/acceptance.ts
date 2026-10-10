@@ -16,20 +16,17 @@ import {
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { canonicalJson, hashText } from "../v2/hash.js";
-import { scanNamespace } from "./catalog.js";
 import {
   applyDistributedTargetV3,
   prepareDistributedSetupV3,
   type DistributedFleetSpec,
 } from "./distributed.js";
 import { ProcessDistributedExecutor } from "./distributed-process.js";
-import { cutoverAdoptionV3, syncFolderV3, verifyFullV3 } from "./engine.js";
-import { activatePeerV3, readEnrollmentRequest } from "./setup.js";
-import { ensureIgnore, loadConfig } from "./config.js";
+import { readEnrollmentRequest } from "./setup.js";
+import { loadConfig } from "./config.js";
 import { compileIgnore, defaultIgnore } from "./ignore.js";
-import { ObjectStore } from "./objects.js";
-import { LocalState } from "./state.js";
-import type { ProductConfig, SyncPolicy } from "./types.js";
+import { HubStore } from "./hub.js";
+import type { SyncPolicy } from "./types.js";
 import { defaultSyncPolicy, policyIncludes } from "./policy.js";
 import {
   cloneAcceptanceObjectTemplate,
@@ -91,6 +88,12 @@ export interface PseudoFleetRunResult {
     readonly allTargetsConvergedMs: number;
   };
   readonly conflicts: number;
+  readonly normalSync: {
+    readonly execution: "packaged-peer-processes";
+    readonly noChangePeers: number;
+    readonly noChangeUploadedObjects: 0;
+    readonly noChangePublished: false;
+  };
   readonly passed: true;
   readonly storage?: {
     readonly kind: "bounded-reflink";
@@ -360,19 +363,34 @@ async function runPseudoFleetRepetition(
       join(repetitionRoot, "hub", "objects", "objects.sqlite"),
     );
   const authorityRoot = requiredRoot(roots, spec.sourceMachineId);
-  const machine = (machineId: string): DistributedFleetSpec["authority"] => ({
-    machineId,
-    peerName: machineId,
-    endpoint: { kind: "local" },
-    command: spec.command,
-    root: requiredRoot(roots, machineId),
-    stateDir: join(repetitionRoot, "peers", machineId, "state"),
-    configPath: join(
-      requiredRoot(roots, machineId),
-      ".codefoldersync",
-      "config.json",
-    ),
-  });
+  const machine = (machineId: string): DistributedFleetSpec["authority"] => {
+    const home = join(repetitionRoot, "peers", machineId, "home");
+    mkdirSync(home, { mode: 0o700 });
+    return {
+      machineId,
+      peerName: machineId,
+      endpoint: { kind: "local" },
+      command: [
+        "/usr/bin/env",
+        `HOME=${home}`,
+        `XDG_CONFIG_HOME=${join(home, "config")}`,
+        `XDG_DATA_HOME=${join(home, "data")}`,
+        `XDG_STATE_HOME=${join(home, "state")}`,
+        `XDG_CACHE_HOME=${join(home, "cache")}`,
+        "GIT_CONFIG_GLOBAL=/dev/null",
+        "GIT_CONFIG_NOSYSTEM=1",
+        "GIT_TERMINAL_PROMPT=0",
+        ...spec.command,
+      ],
+      root: requiredRoot(roots, machineId),
+      stateDir: join(repetitionRoot, "peers", machineId, "state"),
+      configPath: join(
+        requiredRoot(roots, machineId),
+        ".codefoldersync",
+        "config.json",
+      ),
+    };
+  };
   const distributed: DistributedFleetSpec = {
     schemaVersion: 1,
     runId: `${spec.runId}-${repetition}`,
@@ -405,48 +423,78 @@ async function runPseudoFleetRepetition(
   }
 
   const authorityPath = distributed.authority.configPath;
-  const authority = await cutoverAdoptionV3(
+  const authority = await executor.cutover(
+    distributed.authority,
     loadConfig(authorityPath),
-    authorityPath,
   );
   for (const target of distributed.targets)
-    activatePeerV3({
-      acceptedConfig: authority,
-      request: readEnrollmentRequest(target.requestPath),
-      stateDir: target.stateDir,
-      configPath: target.configPath,
-    });
+    await executor.activatePeer(
+      target,
+      authority,
+      readEnrollmentRequest(target.requestPath),
+    );
 
   const workloadStarted = performance.now();
   const workload = writeDeterministicWorkload(authorityRoot, spec.seed);
   const publishStarted = performance.now();
-  const sourceSummary = await syncFolderV3(loadConfig(authorityPath));
+  const sourceSummary = await executor.sync(
+    distributed.authority,
+    loadConfig(authorityPath),
+  );
   if (sourceSummary.status !== "clean" && sourceSummary.status !== "conflict")
     throw new Error("Pseudo-fleet source publication failed");
   const sourcePublishMs = performance.now() - publishStarted;
   for (const target of distributed.targets) {
-    const summary = await syncFolderV3(loadConfig(target.configPath));
+    const summary = await executor.sync(target, loadConfig(target.configPath));
     if (summary.status !== "clean" && summary.status !== "conflict")
       throw new Error(`Pseudo-fleet target sync failed: ${target.machineId}`);
   }
   const allTargetsConvergedMs = performance.now() - workloadStarted;
-  const sourceVerification = await verifyFullV3(loadConfig(authorityPath));
+  const sourceVerification = await executor.verify(
+    distributed.authority,
+    loadConfig(authorityPath),
+  );
   if (
     sourceVerification.status !== "clean" &&
     sourceVerification.status !== "conflict"
   )
     throw new Error("Pseudo-fleet source verification failed");
   const targetDigests: Record<string, string> = {};
-  const sourceDigest = productDigest(loadConfig(authorityPath));
+  using hub = new HubStore(join(repetitionRoot, "hub"));
+  const checkpoint = hub.checkpoint(authority.folderId);
+  if (
+    checkpoint.snapshot === null ||
+    checkpoint.sequence !== sourceVerification.hubSequence
+  )
+    throw new Error(
+      "Pseudo-fleet checkpoint changed after source verification",
+    );
+  const sourceDigest = checkpoint.snapshot.digest;
   let conflicts = sourceVerification.conflicts;
   for (const target of distributed.targets) {
     const targetConfig = loadConfig(target.configPath);
-    const verification = await verifyFullV3(targetConfig);
-    const targetDigest = productDigest(targetConfig);
-    if (targetDigest !== sourceDigest)
-      throw new Error(`Pseudo-fleet digest mismatch: ${target.machineId}`);
-    targetDigests[target.machineId] = targetDigest;
+    const verification = await executor.verify(target, targetConfig);
+    if (verification.status !== "clean" && verification.status !== "conflict")
+      throw new Error(
+        `Pseudo-fleet target verification failed: ${target.machineId}`,
+      );
+    if (verification.hubSequence !== checkpoint.sequence)
+      throw new Error(`Pseudo-fleet checkpoint changed: ${target.machineId}`);
+    // Force verification compared this peer's complete manifest with this seal.
+    targetDigests[target.machineId] = sourceDigest;
     conflicts += verification.conflicts;
+  }
+  const allMachines = [distributed.authority, ...distributed.targets];
+  for (const peer of allMachines) {
+    const unchanged = await executor.sync(peer, loadConfig(peer.configPath));
+    if (
+      (unchanged.status !== "clean" && unchanged.status !== "conflict") ||
+      unchanged.published ||
+      unchanged.hubSequence !== checkpoint.sequence ||
+      unchanged.uploadedObjects !== 0 ||
+      unchanged.downloadedObjects !== 0
+    )
+      throw new Error(`Pseudo-fleet no-change pass failed: ${peer.machineId}`);
   }
   const storage =
     spec.storage === undefined
@@ -462,6 +510,12 @@ async function runPseudoFleetRepetition(
       allTargetsConvergedMs: milliseconds(allTargetsConvergedMs),
     },
     conflicts,
+    normalSync: {
+      execution: "packaged-peer-processes",
+      noChangePeers: allMachines.length,
+      noChangeUploadedObjects: 0,
+      noChangePublished: false,
+    },
     passed: true,
     ...(storage === undefined
       ? {}
@@ -683,19 +737,6 @@ async function fileDigest(path: string): Promise<string> {
     stream.on("end", resolvePromise);
   });
   return hash.digest("hex");
-}
-
-function productDigest(config: ProductConfig): string {
-  using state = new LocalState(config);
-  using objects = new ObjectStore(join(config.stateDir, "objects"));
-  return scanNamespace(
-    config,
-    objects,
-    ensureIgnore(config.root),
-    state.catalog(),
-    true,
-    true,
-  ).manifest.digest;
 }
 
 function milliseconds(value: number): number {

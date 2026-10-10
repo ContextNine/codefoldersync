@@ -1103,6 +1103,12 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
     assert.equal(results.length, 2);
     assert.equal(results[0]?.passed, true);
     assert.equal(results[1]?.passed, true);
+    for (const result of results) {
+      assert.equal(result.normalSync.execution, "packaged-peer-processes");
+      assert.equal(result.normalSync.noChangePeers, 3);
+      assert.equal(result.normalSync.noChangeUploadedObjects, 0);
+      assert.equal(result.normalSync.noChangePublished, false);
+    }
     assert.equal(
       results[0]?.workload.cassetteDigest,
       results[1]?.workload.cassetteDigest,

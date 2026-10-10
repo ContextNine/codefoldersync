@@ -13,6 +13,7 @@ import {
   cutoverAdoptionV3,
   planAdoptionV3,
   sealSourceV3,
+  syncFolderV3,
   verifyFullV3,
 } from "./engine.js";
 import {
@@ -79,7 +80,7 @@ type AgentRequest =
       readonly configPath: string;
     }
   | {
-      readonly action: "seal-source" | "verify";
+      readonly action: "seal-source" | "verify" | "sync";
       readonly configPath: string;
       readonly expected: ConfigExpectation;
     }
@@ -225,6 +226,19 @@ export class ProcessDistributedExecutor implements DistributedExecutor {
     );
   }
 
+  public async sync(
+    machine: DistributedMachineSpec,
+    config: ProductConfig,
+  ): Promise<SyncSummary> {
+    return syncSummary(
+      await callAgent(machine, {
+        action: "sync",
+        configPath: machine.configPath,
+        expected: expectation(config),
+      }),
+    );
+  }
+
   public async cutover(
     machine: DistributedMachineSpec,
     config: ProductConfig,
@@ -338,6 +352,10 @@ export async function runDistributedAgent(request: unknown): Promise<unknown> {
     case "verify": {
       const config = expectedLocalConfig(input.configPath, input.expected);
       return verifyFullV3(config);
+    }
+    case "sync": {
+      const config = expectedLocalConfig(input.configPath, input.expected);
+      return syncFolderV3(config);
     }
     case "cutover": {
       const current = loadConfig(input.configPath);
@@ -480,6 +498,7 @@ function agentRequest(value: unknown): AgentRequest {
     action !== "plan-adoption" &&
     action !== "apply-adoption" &&
     action !== "verify" &&
+    action !== "sync" &&
     action !== "cutover"
   )
     throw new Error("Distributed agent action is invalid");
