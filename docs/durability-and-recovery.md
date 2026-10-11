@@ -4,6 +4,13 @@
 
 V3 has four durability domains: the live root, peer state, hub metadata, and hub objects. Peer and hub SQLite use WAL and `synchronous=FULL`. The root and peer state must share a filesystem so recovery moves and final placement use atomic rename.
 
+State, hub, and shared object-store connections configure SQLite's five-second
+busy timeout before WAL or schema initialization. Independent status and sync
+processes wait through brief transaction contention instead of failing
+immediately or reporting a reachable hub as offline. A lock held beyond that
+bound still fails; it never bypasses locking, changes durability settings, or
+discards queued work.
+
 Peer state contains `state.sqlite`, immutable objects, staging, adoption recovery, apply recovery, logs, keys, encrypted plans, and `baseline.json`. It is owner-only and outside the synchronized root. Detailed adoption paths are encrypted with a target-local AES-256-GCM key; hub adoption records contain only path hashes and `local-only` recovery markers.
 
 ## Capture

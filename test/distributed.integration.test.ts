@@ -924,6 +924,43 @@ test(
         JSON.parse(baselineStatus.stdout).hubSequence,
       );
 
+      // A status process must survive a brief writer lock, not report an
+      // unreachable hub or fail while the native daemon is reconciling.
+      for (const database of [
+        join(state, "state.sqlite"),
+        join(hub, "hub.sqlite"),
+        join(hub, "objects", "objects.sqlite"),
+      ]) {
+        const locker = spawn(
+          process.execPath,
+          [
+            "--input-type=module",
+            "-e",
+            "import {DatabaseSync} from 'node:sqlite'; const db = new DatabaseSync(process.argv[1]); db.exec('PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE'); console.log('LOCKED'); setTimeout(() => { db.exec('COMMIT'); db.close(); }, 750);",
+            database,
+          ],
+          { stdio: ["ignore", "pipe", "pipe"] },
+        );
+        let lockOutput = "",
+          lockError = "";
+        locker.stdout.on("data", (bytes: Buffer) => {
+          lockOutput += bytes.toString("utf8");
+        });
+        locker.stderr.on("data", (bytes: Buffer) => {
+          lockError += bytes.toString("utf8");
+        });
+        const closed = once(locker, "close");
+        try {
+          await waitForText(() => lockOutput, "LOCKED\n", 5_000, lockError);
+          const duringCommit = run(["status", "--config", config]);
+          assert.equal(duringCommit.status, 0, duringCommit.stderr);
+          assert.equal(JSON.parse(duringCommit.stdout).hubReachable, true);
+        } finally {
+          if (locker.exitCode === null) locker.kill("SIGTERM");
+          await closed;
+        }
+      }
+
       daemon = spawn(
         binary,
         [

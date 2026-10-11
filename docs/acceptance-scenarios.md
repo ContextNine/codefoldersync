@@ -72,6 +72,7 @@ The repository retains older sentinel-protected safety and churn harnesses. They
 - the Linux durability lane injects real `ENOSPC` write and `EIO` fsync results below materialization staging, requires an inconclusive result with retained prior bytes, then retries to clean full verification;
 - the historical full-archive controller requires the hashed protected native fault library and executes that write/fsync failure lane inside both complete-corpus repetitions;
 - the Linux watcher lane freezes the daemon, proves `IN_Q_OVERFLOW` with a separate native watcher, writes the included marker after saturation, and requires the scheduled full scan to publish it;
+- that same native case holds short real state, hub, and hub-object database writer locks in another process and requires status to wait and report a reachable hub before testing overflow;
 - the Linux mount lane runs the installed product in a networkless, read-only container with a real nested tmpfs and requires source seal to stop before hub publication;
 - the large-snapshot lane scans 4,096 TypeScript files and proves a no-change pass uploads zero objects;
 - an unreadable Linux subtree stops source seal before the hub accepts a sequence;

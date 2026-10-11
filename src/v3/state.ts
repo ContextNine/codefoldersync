@@ -11,7 +11,7 @@ export class LocalState implements Disposable {
     mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
     this.database = new DatabaseSync(join(config.stateDir, "state.sqlite"));
     this.database.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
+      "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
     );
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS meta (

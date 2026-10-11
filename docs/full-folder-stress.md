@@ -16,8 +16,38 @@ timings, and pass flags, never file contents or path manifests.
 
 Run `node scripts/run_full_folder_stress.mjs /absolute/private/spec.json` as the
 registered unprivileged UID within an already prepared private Btrfs namespace.
-The controller owns image allocation, authenticated archive extraction, mount
-lifetime, and final volume cleanup. This script never formats or mounts storage.
+`scripts/run_archived_folder_stress.mjs controller /absolute/private/spec.json`
+owns image allocation, authenticated archive extraction, mount lifetime, and
+final volume cleanup. Invoke it as root inside a fresh private mount namespace;
+the actual restore and stress commands run as the registered unprivileged UID.
+The inner stress driver never formats or mounts storage.
+
+The controller requires the same-candidate original full-Code acceptance receipt
+and protected folder witnesses before allocating anything. Its specification
+adds the Wootbook original `source` ciphertext and complete parent witness,
+`snapshotId`, protected `identityPath`, approved managed `downloadCommand`, and
+the physical historical `restoreScript` plus its SHA-256. It also supplies
+`runParent`, `evidenceDirectory`, `uid`, `gid`, `seed`, `inheritedMountNamespace`,
+non-overlapping `retainedRoots`, and page-aligned `maximumImageBytes`. It refuses
+Code write targets and a maximum image plus retained allocation and control
+reserve above 200 GiB. Do not launch while another bulk acceptance volume is
+active. Reinventory retained roots after the earlier controller finishes.
+
+The historical restore helper downloads and authenticates the entire original
+Wootbook Code archive into one reserved slot. No partial archive extraction or
+current live copy substitutes for the full parent. The controller initially
+reduces its image maximum by the download slot allowance, then grows only its
+proved matching backing image after that exact slot has been removed. The image
+size stays fixed during stress. All included and excluded folder bytes remain
+present in three mandatory-reflink peers per repetition.
+
+Both cases run sequentially with empty object stores and fresh peer state. A
+run-qualified inner sentinel root owns all installed test tools, peer roots,
+templates, and case evidence, and is removed before the outer volume teardown.
+Only bounded sanitized case results escape in the controller result. All child
+commands drain before unmount; the exact volume is removed after success or
+failure. No original archive, live Code tree, default install, or service is
+removed by controller cleanup.
 
 The schema-version-1 specification supplies:
 
@@ -97,6 +127,14 @@ A green public fixture or a successful archive download does not establish real
 full-folder acceptance.
 
 The existing native storage fixture invokes
-`test/fixtures/full-folder-stress.mjs` for both policies. Its complete public
-master includes an ignored malformed Git marker and failing Git hooks/filters to
-exercise safe staging and traversal. This adds no top-level product test group.
+`test/fixtures/full-folder-stress.mjs` for both policies through the complete
+controller lifecycle. Its protected complete public parent contains both
+folders, including an ignored malformed Git marker and failing Git hooks/filters
+to exercise safe staging and traversal. It encrypts that parent, restores it
+through the historical helper, runs both cases as an unprivileged peer inside a
+new nested private namespace, and checks the unchanged parent and ciphertext
+plus exact volume cleanup. This adds no top-level product test group and does
+not certify an original archive or overall fleet capacity.
+A second controller invocation corrupts only its fresh downloaded ciphertext.
+It must reject before stress, remove the exact failed volume, and retain the
+original fixture ciphertext unchanged.

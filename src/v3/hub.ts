@@ -32,7 +32,7 @@ export class HubStore implements Disposable {
     chmodSync(this.root, 0o700);
     this.database = new DatabaseSync(join(this.root, "hub.sqlite"));
     this.database.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
+      "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
     );
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS folders (

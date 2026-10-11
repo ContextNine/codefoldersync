@@ -33,6 +33,7 @@ const gid = Number(gidText);
 assert.ok(Number.isSafeInteger(uid) && uid > 0);
 assert.ok(Number.isSafeInteger(gid) && gid > 0);
 const fixtureDirectory = dirname(fileURLToPath(import.meta.url));
+const imageMaximumBytes = 1024 ** 3;
 
 function command(program, args) {
   const result = spawnSync(program, args, { encoding: "utf8" });
@@ -71,7 +72,7 @@ try {
   chownSync(join(root, "SENTINEL"), uid, gid);
   const image = join(root, "fresh-filesystem.img");
   const fd = openSync(image, "wx", 0o600);
-  ftruncateSync(fd, 256 * 1024 ** 2);
+  ftruncateSync(fd, imageMaximumBytes);
   closeSync(fd);
   assert.ok(lstatSync(image).isFile() && !lstatSync(image).isSymbolicLink());
   // Format only this newly created image, never a block device or existing file.
@@ -301,7 +302,7 @@ renameSync(peer + '/Code/folder', peer + '/Code/renamed');`;
       volumeRunRoot: root,
       imagePath: image,
       mountRoot: mountpoint,
-      maximumImageBytes: 256 * 1024 ** 2,
+      maximumImageBytes: imageMaximumBytes,
       inheritedMountNamespace: inheritedNamespace,
       retainedRoots: [residue],
       objectTemplate: join(templateDirectory, "objects.sqlite"),
@@ -424,7 +425,7 @@ console.log(JSON.stringify(results));`;
       outer: root,
       image,
       mount: mountpoint,
-      maximumImageBytes: 256 * 1024 ** 2,
+      maximumImageBytes: imageMaximumBytes,
       inheritedMountNamespace: inheritedNamespace,
       retainedRoots: [controllerFixture, residue],
       candidateArchive,

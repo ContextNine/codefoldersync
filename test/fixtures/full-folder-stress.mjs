@@ -9,11 +9,12 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
+  realpathSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { runFullFolderStress } from "../../scripts/run_full_folder_stress.mjs";
 
 const control = JSON.parse(readFileSync(process.argv[2], "utf8"));
 assert.equal(process.getuid(), control.uid);
@@ -32,7 +33,11 @@ const env = {
 Object.assign(process.env, env);
 const command = (program, args) => {
   const result = spawnSync(program, args, { env, encoding: "utf8" });
-  assert.equal(result.status, 0, "Public mechanics command failed");
+  const coarse =
+    result.stderr?.match(
+      /Archived folder stress failed at [a-z0-9-]+ \(line \d+\)\./u,
+    )?.[0] ?? "";
+  assert.equal(result.status, 0, `Public mechanics command failed. ${coarse}`);
   return result.stdout;
 };
 assert.equal(
@@ -52,18 +57,8 @@ const packageRoot = join(root, "codefoldersync-0.3.0");
 const module = (name) =>
   import(pathToFileURL(join(packageRoot, "dist/v3", `${name}.js`)).href);
 const { createTreeWitness } = await module("acceptance");
-const { ObjectStore } = await module("objects");
 const { cleanupRunRoot } = await module("storage");
 try {
-  command("python3", [
-    join(packageRoot, "scripts/install.py"),
-    "--install-root",
-    join(root, "lib"),
-    "--bin-dir",
-    join(root, "bin"),
-    "--release-sha256",
-    control.candidateSha256,
-  ]);
   const master = join(root, "master");
   mkdirSync(master, { mode: 0o700 });
   writeFileSync(join(master, "tracked.ts"), "export const fixture = true;\n");
@@ -123,56 +118,185 @@ try {
   };
   protect(master);
   const masterWitness = await createTreeWitness(master);
-  const template = join(root, "object-template");
-  const emptyTemplate = new ObjectStore(template);
-  emptyTemplate[Symbol.dispose]();
-  protect(template);
-  const results = [];
+  const fullParent = join(root, "controller-master/Code");
+  mkdirSync(fullParent, { recursive: true, mode: 0o700 });
   for (const caseId of ["impression", "verascient"]) {
-    const runRoot = join(root, `run-${caseId}`);
-    const caseRunId = `public-full-${caseId}-stress`;
-    mkdirSync(runRoot, { mode: 0o700 });
-    writeFileSync(join(runRoot, "SENTINEL"), `${caseRunId}\n`, {
-      mode: 0o600,
-      flag: "wx",
-    });
-    const result = await runFullFolderStress({
+    command("cp", ["-a", "--reflink=always", master, join(fullParent, caseId)]);
+  }
+  protect(fullParent);
+  const parentWitness = await createTreeWitness(fullParent);
+  const ciphertexts = join(root, "controller-ciphertexts");
+  mkdirSync(ciphertexts, { mode: 0o700 });
+  writeFileSync(
+    join(ciphertexts, "SENTINEL"),
+    "public-archived-controller-fixture\n",
+    { mode: 0o600 },
+  );
+  const identityPath = join(ciphertexts, "fixture.agekey");
+  command("age-keygen", ["--output", identityPath]);
+  const recipient = command("age-keygen", ["--y", identityPath]).trim();
+  const bundle = join(ciphertexts, "wootbook");
+  mkdirSync(bundle, { mode: 0o700 });
+  const archiveName = "wootbook-code.tar.zst.age";
+  const archive = join(bundle, archiveName);
+  command("bash", [
+    "-o",
+    "pipefail",
+    "-c",
+    'tar -cf - -C "$1" Code | zstd --quiet --stdout | age --recipient "$2" --output "$3"',
+    "public-fixture",
+    join(root, "controller-master"),
+    recipient,
+    archive,
+  ]);
+  const archiveSha256 = createHash("sha256")
+    .update(readFileSync(archive))
+    .digest("hex");
+  const archiveBytes = lstatSync(archive).size;
+  const snapshotId = "public-controller-snapshot";
+  writeFileSync(
+    join(bundle, "witness.json"),
+    JSON.stringify({
+      schema_version: 1,
+      snapshot_id: snapshotId,
+      machine_id: "wootbook",
+      artifacts: [
+        { name: archiveName, size: archiveBytes, sha256: archiveSha256 },
+      ],
+    }),
+    { mode: 0o600 },
+  );
+  const restoreScript = new URL(
+    "../../scripts/run_bounded_archived_acceptance.mjs",
+    import.meta.url,
+  ).pathname;
+  const folderController = new URL(
+    "../../scripts/run_archived_folder_stress.mjs",
+    import.meta.url,
+  ).pathname;
+  const controllerControl = join(root, "controller-run.json");
+  const controllerEvidence = join(root, "controller-evidence");
+  const controllerVolumes = () =>
+    readdirSync(control.mount)
+      .filter((name) =>
+        /^run-public-controller-(?:fixture|failure)-/u.test(name),
+      )
+      .sort();
+  const previousVolumes = controllerVolumes();
+  writeFileSync(
+    controllerControl,
+    JSON.stringify({
       schemaVersion: 1,
-      caseId,
       corpus: "public-fixture",
-      runId: caseRunId,
-      runRoot,
+      runId: "public-controller-fixture",
+      snapshotId,
+      seed: "public-controller-mechanics",
+      uid: control.uid,
+      gid: process.getgid(),
+      inheritedMountNamespace: readlinkSync("/proc/self/ns/mnt"),
+      source: {
+        machineId: "wootbook",
+        witness: parentWitness,
+        archiveName,
+        bytes: archiveBytes,
+        sha256: archiveSha256,
+        recoveryVerified: true,
+        remoteDownloadedContentVerified: true,
+      },
       candidateArchive: control.candidateArchive,
       candidateSha256: control.candidateSha256,
-      packageRoot,
-      command: [join(root, "bin/codefoldersync")],
-      masterRoot: master,
-      masterWitness,
-      repetitions: 2,
-      rounds: 2,
-      uid: control.uid,
-      seed: `public-${caseId}-mechanics`,
-      evidenceDirectory: join(root, `${caseId}-evidence`),
       nativeFaultLibrary: control.nativeFaultLibrary,
-      storage: {
-        kind: "bounded-reflink",
-        volumeRunId: control.runId,
-        volumeRunRoot: control.outer,
-        imagePath: control.image,
-        mountRoot: control.mount,
-        maximumImageBytes: control.maximumImageBytes,
-        inheritedMountNamespace: control.inheritedMountNamespace,
-        retainedRoots: control.retainedRoots,
-        objectTemplate: join(template, "objects.sqlite"),
-      },
-    });
-    assert.equal(result.passed, true);
-    assert.equal(result.acceptanceCorpus, false);
-    assert.equal(existsSync(runRoot), false);
+      identityPath,
+      maximumImageBytes: 512 * 1024 ** 2,
+      runParent: control.mount,
+      retainedRoots: [root],
+      evidenceDirectory: controllerEvidence,
+      restoreScript,
+      restoreScriptSha256: createHash("sha256")
+        .update(readFileSync(restoreScript))
+        .digest("hex"),
+      downloadCommand: [
+        process.execPath,
+        new URL("copy-download.mjs", import.meta.url).pathname,
+        ciphertexts,
+      ],
+    }),
+    { mode: 0o600, flag: "wx" },
+  );
+  const completion = JSON.parse(
+    command(realpathSync("/usr/bin/sudo"), [
+      "-n",
+      "unshare",
+      "--mount",
+      "--fork",
+      "--propagation",
+      "private",
+      process.execPath,
+      folderController,
+      "controller",
+      controllerControl,
+    ]),
+  );
+  assert.equal(completion.passed, true);
+  assert.equal(completion.cleaned, true);
+  const result = JSON.parse(
+    readFileSync(join(controllerEvidence, "controller-result.json"), "utf8"),
+  );
+  assert.equal(result.passed, true);
+  assert.equal(result.acceptanceCorpus, false);
+  assert.equal(result.unchangedParent, true);
+  assert.deepEqual(result.parentWitness, parentWitness);
+  assert.deepEqual(await createTreeWitness(fullParent), parentWitness);
+  assert.equal(result.cleaned, true);
+  assert.deepEqual(controllerVolumes(), previousVolumes);
+  const failureSpec = join(root, "controller-failure.json");
+  const failureEvidence = join(root, "controller-failure-evidence");
+  const acceptedSpec = JSON.parse(readFileSync(controllerControl, "utf8"));
+  writeFileSync(
+    failureSpec,
+    JSON.stringify({
+      ...acceptedSpec,
+      runId: "public-controller-failure",
+      evidenceDirectory: failureEvidence,
+      downloadCommand: [...acceptedSpec.downloadCommand, "--corrupt-download"],
+    }),
+    { mode: 0o600, flag: "wx" },
+  );
+  const rejected = spawnSync(
+    realpathSync("/usr/bin/sudo"),
+    [
+      "-n",
+      "unshare",
+      "--mount",
+      "--fork",
+      "--propagation",
+      "private",
+      process.execPath,
+      folderController,
+      "controller",
+      failureSpec,
+    ],
+    { env, encoding: "utf8" },
+  );
+  assert.equal(rejected.status, 1);
+  const rejectedResult = JSON.parse(
+    readFileSync(join(failureEvidence, "controller-result.json"), "utf8"),
+  );
+  assert.equal(rejectedResult.passed, false);
+  assert.equal(rejectedResult.cleaned, true);
+  assert.deepEqual(controllerVolumes(), previousVolumes);
+  assert.equal(
+    createHash("sha256").update(readFileSync(archive)).digest("hex"),
+    archiveSha256,
+  );
+  const results = [];
+  for (const caseResult of result.cases) {
+    assert.equal(caseResult.passed, true);
+    assert.equal(caseResult.acceptanceCorpus, false);
     results.push({
-      caseId,
+      caseId: caseResult.caseId,
       passed: true,
-      repetitions: result.results.length,
+      repetitions: caseResult.results.length,
       acceptanceCorpus: false,
     });
   }
@@ -181,6 +305,12 @@ try {
     JSON.stringify({
       schemaVersion: 1,
       publicDriverMechanics: results,
+      completeParentController: true,
+      completeParentWitnessMatched: true,
+      exactControllerStageCleanup: true,
+      fullControllerLifecycle: true,
+      originalFixtureCiphertextUnchanged: true,
+      corruptedDownloadRejectedAndCleaned: true,
       unchangedMaster: true,
       ignoredInvalidGitMarkerRetained: true,
       unsafeGitHooksAndFiltersNotInvoked: true,

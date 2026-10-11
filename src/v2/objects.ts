@@ -55,7 +55,7 @@ export class ObjectStore implements Disposable {
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     this.database = new DatabaseSync(join(this.root, "objects.sqlite"));
     this.database.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA temp_store=MEMORY;",
+      "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA temp_store=MEMORY;",
     );
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS objects (
