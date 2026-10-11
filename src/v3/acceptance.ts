@@ -309,7 +309,11 @@ export async function runPseudoFleetAcceptanceV3(
     writeBoundedEvidence(spec, results);
     return results;
   } catch (error) {
-    writeBoundedFailure(spec);
+    try {
+      writeBoundedFailure(spec);
+    } catch {
+      // An exhausted evidence destination must not replace the acceptance fault.
+    }
     throw error;
   } finally {
     cleanupRunRoot({

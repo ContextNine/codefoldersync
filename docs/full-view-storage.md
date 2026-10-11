@@ -120,6 +120,18 @@ sudo -n unshare --mount --fork --propagation private node scripts/run_bounded_ar
 
 The private specification declares schema 1, a run ID, original snapshot ID, seed, unprivileged UID/GID, inherited mount namespace, protected identity path, accepted candidate archive/hash, existing physical run parent, fresh external evidence directory, all retained acceptance roots, and an allocation limit no greater than 200 GiB. `corpus` is `original-code-archive` for the actual campaign; public fixture runs explicitly use `public-fixture` and report `acceptanceCorpus: false`. Write destinations and retained roots may not be inside a live Code directory. Canonical executable paths must resolve without symlinks. This is not a general fleet provisioner.
 
+The controller creates only its fresh disposable image with Btrfs metadata
+profile `single`, then checks the mounted profile and records it in the external
+receipt. Millions of archived entries and independent peer inodes require
+substantial metadata space; duplicating that metadata inside one backing image
+can exhaust the fixed budget before synchronization starts. This layout applies
+only to derived test storage. Original encrypted backups, recovery identities,
+and immutable reference witnesses remain outside the image. It trades redundant
+filesystem metadata in disposable views for space, not corpus completeness or
+the product's integrity, private-write-isolation, and recovery assertions. A
+damaged test volume still fails acceptance and can be rebuilt from the originals.
+Do not convert a running campaign's profile or enlarge its image to claim a pass.
+
 Each of the three source records declares its exact archive name, ciphertext bytes/SHA-256, complete historical protected `TreeWitness`, and already proved recovery/downloaded-content gates. The specification references witnesses, never plaintext credentials or ENV values. Those gate booleans are controller inputs, not independent certification of prior Drive acceptance; the operator must retain actual managed verification evidence separately.
 
 Use the maintained Rclone controller as `downloadCommand`, for example an absolute Python executable and the installed or maintained `rclone_google_drive.py` path. The runner adds `download --machine-id wootbook --source-machine-id … --snapshot-id … --destination … --approve`. It never enumerates another hierarchy or copies credentials. The downloader must return its verified JSON receipt only after all transfer children have exited.
@@ -132,11 +144,17 @@ The controller hashes the candidate archive before extraction and installation i
 
 Failed results retain the candidate hash, the completed three-tree restore witnesses when available, and a sanitized failure record. The record contains only a controlled phase, a recognized error-code enum, source module/line, and child exit status/signal when available. Unknown errors stay `unknown`; do not infer ENOSPC from low free space alone. Before unmounting, record available filesystem bytes, total filesystem bytes, allocated image bytes, its declared maximum, and retained allocation. Raw exception messages, paths, command stderr, and secret values are never retained. Interrupts notify the unprivileged worker but drain its current managed transfer before cleanup, so a broker-owned child cannot keep writing into a deleted slot.
 
+The runner's in-volume failure receipt is best effort. If writing it also fails,
+preserve the original acceptance exception for the outer controller's bounded
+stderr protocol and external receipt; a second evidence-directory error must
+not mask the triggering fault. Exact cleanup still runs.
+
 The existing native storage fixture exercises this controller with three complete public encrypted trees, including a downloader deliberately placed in the fixture parent's namespace, outside the controller's namespace. The parent PID is explicit; no host PID or host-visible temporary directory is assumed. This lets the entire nested fixture stay inside an already bounded private volume. Generated ciphertext and candidate ownership transfers before the unprivileged stress process starts. It proves historical comparison, sequential slot cleanup, pre-run resize, exact-candidate installation, two fresh convergent repetitions, and final volume removal. A second invocation corrupts only a new downloaded ciphertext and proves rejection/cleanup while the original fixture archives retain their hashes. Initial fixture failures caught a noncanonical executable path before the workflow started. These checks do not prove that the real original archives fit, that Drive recovery completed, or that the remaining full-data fault, native, stress, release, and pilot gates passed.
 
 The fixture's 1 GiB parent image uses mixed data/metadata groups, following the
 [Btrfs small-filesystem guidance](https://btrfs.readthedocs.io/en/latest/mkfs.btrfs.html).
 Its final synchronized/trimmed physical allocation must still be below 64 MiB.
 This layout applies only to the small disposable parent fixture. Its nested
-controllers and the real full-data controller keep their standard layout;
+controllers and the real full-data controller keep separate data/metadata groups
+with the disposable controller's verified `single` metadata profile;
 neither the 200 GiB fleet acceptance cap nor a real campaign's image changes.

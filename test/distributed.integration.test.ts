@@ -1268,6 +1268,34 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
     );
     assert.equal(existsSync(failedRunRoot), false);
     assert.equal(existsSync(join(failedEvidence, "failure.json")), true);
+
+    const unreadableRoot = join(base, "unreadable-master", "Code");
+    createTree(unreadableRoot, "unreadable-fixture");
+    const unreadableFile = join(unreadableRoot, "unreadable.txt");
+    writeFileSync(unreadableFile, "synthetic acceptance fixture\n");
+    const unreadableWitness = await createTreeWitness(unreadableRoot);
+    chmodSync(unreadableFile, 0o000);
+    const blockedParent = join(base, "blocked-evidence-parent");
+    writeFileSync(blockedParent, "not an evidence directory\n");
+    mkdirSync(failedRunRoot, { mode: 0o700 });
+    writeFileSync(join(failedRunRoot, "SENTINEL"), `${runId}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    await assert.rejects(
+      runPseudoFleetAcceptanceV3({
+        ...spec,
+        runRoot: failedRunRoot,
+        evidenceDirectory: join(blockedParent, "evidence"),
+        masters: spec.masters.map((master, index) =>
+          index === 0
+            ? { ...master, root: unreadableRoot, witness: unreadableWitness }
+            : master,
+        ),
+      }),
+      { code: "EACCES" },
+    );
+    assert.equal(existsSync(failedRunRoot), false);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }

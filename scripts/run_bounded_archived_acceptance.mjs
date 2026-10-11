@@ -323,6 +323,7 @@ async function controller() {
   let restored;
   let failure;
   let storageAtFailure;
+  let filesystemMetadataProfile;
   try {
     step = "volume-create";
     writeFileSync(join(outer, "SENTINEL"), `${spec.runId}\n`, {
@@ -337,7 +338,8 @@ async function controller() {
       closeSync(descriptor);
     }
     assert.ok(lstatSync(image).isFile() && lstatSync(image).nlink === 1);
-    await command("mkfs.btrfs", ["--nodiscard", image]);
+    // Original ciphertext stays outside this disposable, checksum-verified volume.
+    await command("mkfs.btrfs", ["--nodiscard", "--metadata", "single", image]);
     mkdirSync(mount, { mode: 0o700 });
     await command("mount", [
       "-t",
@@ -348,6 +350,9 @@ async function controller() {
       mount,
     ]);
     mounted = true;
+    const layout = await command("btrfs", ["filesystem", "df", "--raw", mount]);
+    filesystemMetadataProfile = layout.match(/^Metadata, (\w+):/mu)?.[1];
+    assert.equal(filesystemMetadataProfile, "single");
     owner(mount);
     const control = {
       ...spec,
@@ -435,6 +440,7 @@ async function controller() {
       runId: spec.runId,
       acceptanceCorpus: spec.corpus === "original-code-archive",
       candidateSha256: spec.candidateSha256,
+      filesystemMetadataProfile,
       passed,
       cleaned: true,
       removedAllocatedBytes: cleaned.removedAllocatedBytes,

@@ -504,6 +504,7 @@ console.log(JSON.stringify(results));`;
     ),
   );
   assert.equal(controllerEvidence.acceptanceCorpus, false);
+  assert.equal(controllerEvidence.filesystemMetadataProfile, "single");
   assert.equal(controllerEvidence.historicalTrees.length, 3);
   assert.equal(controllerEvidence.repetitions.length, 2);
   assert.ok(controllerEvidence.maximumTotalBytes <= 512 * 1024 ** 2);
