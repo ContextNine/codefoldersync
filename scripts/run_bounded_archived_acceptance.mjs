@@ -22,6 +22,7 @@ import {
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "../dist/v2/hash.js";
+import { distributedAgentFailureDetail } from "../dist/v3/distributed-process.js";
 import {
   inspectPhysicalTree,
   storageLimits,
@@ -53,6 +54,7 @@ const failureCodes = new Set([
   "ENOENT",
   "ERR_ASSERTION",
   "command-failed",
+  "distributed-agent-failed",
   "unknown",
 ]);
 
@@ -65,6 +67,7 @@ function failureRecord(error) {
   return {
     phase: step,
     code: failureCodes.has(error?.code) ? error.code : "unknown",
+    ...distributedAgentFailureDetail(error),
     ...(location ? { module: location[1], line: Number(location[2]) } : {}),
   };
 }
@@ -83,6 +86,7 @@ function readFailure(line) {
     return {
       phase: value.phase,
       code: value.code,
+      ...distributedAgentFailureDetail(value),
       ...(typeof value.module === "string" &&
       /^[a-z0-9_-]+\.(?:mjs|js)$/u.test(value.module) &&
       Number.isSafeInteger(value.line) &&

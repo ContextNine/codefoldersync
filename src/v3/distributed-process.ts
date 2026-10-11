@@ -171,6 +171,89 @@ type AgentRequest =
       readonly adoptionId: string;
     };
 
+const agentActions = [
+  "inspect",
+  "setup-authority",
+  "prepare-enrollment",
+  "enroll-peer",
+  "activate-peer",
+  "seal-source",
+  "verify",
+  "sync",
+  "cutover",
+  "acceptance-sync-crash",
+  "acceptance-recover",
+  "plan-adoption",
+  "apply-adoption",
+] as const satisfies readonly AgentRequest["action"][];
+const observedStderrCodes = [
+  "ENOSPC",
+  "EDQUOT",
+  "EIO",
+  "EACCES",
+  "EPERM",
+  "ENOENT",
+  "ERR_ASSERTION",
+  "unknown",
+] as const;
+
+export class DistributedAgentFailure extends Error {
+  public readonly code = "distributed-agent-failed";
+  public readonly observedStderrCode;
+
+  public constructor(
+    public readonly action: AgentRequest["action"],
+    public readonly agentExitCode: number | null,
+    stderr: string,
+  ) {
+    const observed =
+      observedStderrCodes.find(
+        (code) =>
+          code !== "unknown" &&
+          new RegExp(`(?:^|[^A-Z0-9_])${code}(?:$|[^A-Z0-9_])`, "u").test(
+            stderr,
+          ),
+      ) ?? "unknown";
+    super(
+      `Distributed agent failed: ${action}; exit ${agentExitCode}; observed stderr code ${observed}`,
+    );
+    this.observedStderrCode = observed;
+  }
+}
+
+// Structural validation also works across separately imported installed builds.
+// A code seen in stderr is diagnostic evidence, not proof of the failure cause.
+export function distributedAgentFailureDetail(error: unknown) {
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("code" in error) ||
+    error.code !== "distributed-agent-failed" ||
+    !("action" in error) ||
+    !("agentExitCode" in error) ||
+    !("observedStderrCode" in error)
+  )
+    return {};
+  const action = agentActions.find((action) => action === error.action);
+  const observedStderrCode = observedStderrCodes.find(
+    (code) => code === error.observedStderrCode,
+  );
+  const agentExitCode = error.agentExitCode;
+  if (
+    action === undefined ||
+    observedStderrCode === undefined ||
+    !(
+      agentExitCode === null ||
+      (typeof agentExitCode === "number" &&
+        Number.isSafeInteger(agentExitCode) &&
+        agentExitCode >= 0 &&
+        agentExitCode <= 255)
+    )
+  )
+    return {};
+  return { action, agentExitCode, observedStderrCode };
+}
+
 export class ProcessDistributedExecutor implements DistributedExecutor {
   public async inspect(
     machine: DistributedMachineSpec,
@@ -611,8 +694,10 @@ async function callAgent(
       }
       if (status !== 0) {
         reject(
-          new Error(
-            `Distributed agent failed on ${machine.machineId}: ${request.action}: ${childFailureDetail(Buffer.concat(stderr).toString("utf8"))}`,
+          new DistributedAgentFailure(
+            request.action,
+            status,
+            Buffer.concat(stderr).toString("utf8"),
           ),
         );
         return;
@@ -629,13 +714,6 @@ async function callAgent(
     });
     child.stdin.end(`${JSON.stringify(request)}\n`);
   });
-}
-
-function childFailureDetail(stderr: string): string {
-  const normalized = stderr.trim().replaceAll(/\s+/gu, " ");
-  return normalized.length === 0
-    ? "no stderr"
-    : normalized.slice(Math.max(0, normalized.length - 4_096));
 }
 
 function assertAcceptancePeer(

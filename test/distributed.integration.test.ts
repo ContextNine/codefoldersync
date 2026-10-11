@@ -41,7 +41,11 @@ import {
   prepareDistributedSetupV3,
   type DistributedExecutor,
 } from "../src/v3/distributed.js";
-import { ProcessDistributedExecutor } from "../src/v3/distributed-process.js";
+import {
+  DistributedAgentFailure,
+  distributedAgentFailureDetail,
+  ProcessDistributedExecutor,
+} from "../src/v3/distributed-process.js";
 import {
   runVisibilityObserver,
   type VisibilityEvent,
@@ -129,6 +133,38 @@ test("distributed setup previews, prepares, resumes, and applies one approved ta
       ],
     };
     const specPath = join(base, "distributed.json");
+    await assert.rejects(
+      new ProcessDistributedExecutor().inspect({
+        ...spec.authority,
+        command: [
+          process.execPath,
+          "-e",
+          "process.stdin.resume(); process.stderr.write('ENOSPC synthetic-private-canary\\n'); process.exitCode = 23;",
+        ],
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof DistributedAgentFailure);
+        assert.deepEqual(distributedAgentFailureDetail(error), {
+          action: "inspect",
+          agentExitCode: 23,
+          observedStderrCode: "ENOSPC",
+        });
+        const record = {
+          code: error.code,
+          ...distributedAgentFailureDetail(error),
+        };
+        assert.deepEqual(
+          distributedAgentFailureDetail(JSON.parse(JSON.stringify(record))),
+          {
+            action: "inspect",
+            agentExitCode: 23,
+            observedStderrCode: "ENOSPC",
+          },
+        );
+        assert.equal(error.message.includes("synthetic-private-canary"), false);
+        return true;
+      },
+    );
     writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, {
       encoding: "utf8",
       mode: 0o600,
