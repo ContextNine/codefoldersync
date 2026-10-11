@@ -48,6 +48,17 @@ Inventory every retained acceptance root outside the volume in `retainedRoots`. 
 
 Each repetition clones the closed, protected `objects.sqlite` with `--reflink=always` into distinct writable peer and hub inodes. Product reads still verify SHA-256 integrity. Existing objects are explicitly **preseeded** in the result; only subsequent workload objects exercise new-object transfer. Repetitions run sequentially and remove their exact sentinel-qualified peer/hub roots after retaining bounded results. The final whole-master witnesses must still match. No product garbage collection is enabled.
 
+Each peer also hashes its complete local Git metadata, ignored trees, reserved
+`.workspace-sync` state, and custody-excluded leaves before setup and after all
+faults and no-change verification. The witnesses include paths internally,
+types, modes, sizes, symlink text, and exact file hashes, but expose only aggregate
+counts and one digest per peer. They must match that same peer's initial witness,
+not another machine's state. Traversal never follows symlinks or crosses mounts.
+Only the root `.codefoldersync` and `.codefoldersyncignore` projections are
+omitted because this fresh setup owns them. Nested historical metadata is still
+witnessed. This proves byte and
+mode preservation, not Git object validity or paused-checkout eligibility.
+
 The external controller creates and formats only a new exclusive-created image, owns namespace/process lifetime, restores the full historical masters, and builds the template. It must stop all children and unmount before outer-root cleanup. The product does not mount, format, elevate privileges, or install a permanent filesystem. This storage support is not a completed original-archive campaign, native fleet test, or real-folder stress result.
 
 ## Full-tree fault stages

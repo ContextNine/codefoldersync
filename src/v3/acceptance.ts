@@ -104,6 +104,7 @@ export interface PseudoFleetRunResult {
     readonly noChangeUploadedObjects: 0;
     readonly noChangePublished: false;
   };
+  readonly localStatePreserved: Readonly<Record<string, TreeWitness>>;
   readonly passed: true;
   readonly storage?: {
     readonly kind: "bounded-reflink";
@@ -136,6 +137,20 @@ export function readPseudoFleetAcceptanceSpec(
 }
 
 export async function createTreeWitness(root: string): Promise<TreeWitness> {
+  return treeWitness(root, false);
+}
+
+/** Hash local Git and excluded bytes without recording paths or contents. */
+export async function createLocalStateWitness(
+  root: string,
+): Promise<TreeWitness> {
+  return treeWitness(root, true);
+}
+
+async function treeWitness(
+  root: string,
+  localOnly: boolean,
+): Promise<TreeWitness> {
   const absoluteRoot = resolve(root);
   const rootStat = lstatSync(absoluteRoot);
   if (!rootStat.isDirectory())
@@ -146,12 +161,20 @@ export async function createTreeWitness(root: string): Promise<TreeWitness> {
   let files = 0;
   let symlinks = 0;
   let bytes = 0;
+  const ignorePath = join(absoluteRoot, ".codefoldersyncignore");
+  const ignore = localOnly
+    ? compileIgnore(
+        existsSync(ignorePath)
+          ? readFileSync(ignorePath, "utf8")
+          : defaultIgnore,
+      )
+    : undefined;
   const appendRecord = (record: string): void => {
     if (entries > 0) digest.update("\n");
     digest.update(record);
     entries += 1;
   };
-  const visit = async (directory: string): Promise<void> => {
+  const visit = async (directory: string, excluded = false): Promise<void> => {
     const entries = readdirSync(directory, { withFileTypes: true }).sort(
       (a, b) => Buffer.from(a.name).compare(Buffer.from(b.name)),
     );
@@ -161,12 +184,29 @@ export async function createTreeWitness(root: string): Promise<TreeWitness> {
       if (stat.dev !== rootStat.dev)
         throw new Error("Tree witness refuses to cross a nested mount");
       const local = relative(absoluteRoot, path).split(sep).join("/");
+      // Setup owns only this root projection; historical nested state stays local.
+      if (
+        localOnly &&
+        [".codefoldersync", ".codefoldersyncignore"].includes(
+          local.toLowerCase(),
+        )
+      )
+        continue;
+      const locallyRetained =
+        excluded ||
+        entry.name.toLowerCase() === ".git" ||
+        (ignore?.ignores(local, stat.isDirectory()) ?? false) ||
+        (!stat.isDirectory() && !policyIncludes(defaultSyncPolicy, local));
+      const include = !localOnly || locallyRetained;
       const mode = stat.mode & 0o7777;
       if (stat.isDirectory()) {
-        directories += 1;
-        appendRecord(canonicalJson([local, "directory", mode]));
-        await visit(path);
+        if (include) {
+          directories += 1;
+          appendRecord(canonicalJson([local, "directory", mode]));
+        }
+        await visit(path, locallyRetained);
       } else if (stat.isFile()) {
+        if (!include) continue;
         files += 1;
         bytes += stat.size;
         appendRecord(
@@ -179,6 +219,7 @@ export async function createTreeWitness(root: string): Promise<TreeWitness> {
           ]),
         );
       } else if (stat.isSymbolicLink()) {
+        if (!include) continue;
         symlinks += 1;
         appendRecord(
           canonicalJson([local, "symlink", mode, readlinkSync(path)]),
@@ -418,6 +459,12 @@ async function runPseudoFleetRepetition(
     })),
   };
   const executor = new ProcessDistributedExecutor();
+  const localStateBefore = new Map<string, TreeWitness>();
+  for (const peer of [distributed.authority, ...distributed.targets])
+    localStateBefore.set(
+      peer.machineId,
+      await createLocalStateWitness(peer.root),
+    );
   const prepared = await prepareDistributedSetupV3(distributed, executor);
   for (const target of prepared.targets) {
     if (target.adoptionId === null)
@@ -515,6 +562,16 @@ async function runPseudoFleetRepetition(
     )
       throw new Error(`Pseudo-fleet no-change pass failed: ${peer.machineId}`);
   }
+  const localStatePreserved: Record<string, TreeWitness> = {};
+  for (const peer of allMachines) {
+    const witness = await createLocalStateWitness(peer.root);
+    if (
+      canonicalJson(witness) !==
+      canonicalJson(localStateBefore.get(peer.machineId))
+    )
+      throw new Error(`Pseudo-fleet local state changed: ${peer.machineId}`);
+    localStatePreserved[peer.machineId] = witness;
+  }
   const storage =
     spec.storage === undefined
       ? undefined
@@ -530,6 +587,7 @@ async function runPseudoFleetRepetition(
     },
     conflicts,
     faults,
+    localStatePreserved,
     normalSync: {
       execution: "packaged-peer-processes",
       noChangePeers: allMachines.length,

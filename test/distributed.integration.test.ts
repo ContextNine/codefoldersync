@@ -1050,6 +1050,40 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
     for (const [machineId, value] of masterInputs) {
       const root = join(base, "masters", machineId, "Code");
       createTree(root, value);
+      for (const local of ["node_modules/private", ".workspace-sync"]) {
+        mkdirSync(join(root, local), { recursive: true });
+        writeFileSync(
+          join(root, local, "local.txt"),
+          `local-only:${machineId}\n`,
+        );
+      }
+      const repository = join(root, "repository");
+      mkdirSync(repository);
+      writeFileSync(
+        join(repository, "tracked.ts"),
+        "export const tracked = true;\n",
+      );
+      for (const args of [
+        ["init", "-b", "master"],
+        ["add", "tracked.ts"],
+        ["commit", "-m", "fixture"],
+      ]) {
+        const result = spawnSync("git", ["-C", repository, ...args], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_AUTHOR_NAME: "Acceptance fixture",
+            GIT_COMMITTER_NAME: "Acceptance fixture",
+            GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+            GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+            GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
+            GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
+          },
+        });
+        assert.equal(result.status, 0, result.stderr);
+      }
       masters.push({ machineId, root, witness: await createTreeWitness(root) });
     }
     const spec: PseudoFleetAcceptanceSpec = {
@@ -1108,6 +1142,15 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
       assert.equal(result.normalSync.noChangePeers, 3);
       assert.equal(result.normalSync.noChangeUploadedObjects, 0);
       assert.equal(result.normalSync.noChangePublished, false);
+      assert.deepEqual(Object.keys(result.localStatePreserved).sort(), [
+        "mattbook",
+        "wootbook",
+        "workermacair",
+      ]);
+      for (const witness of Object.values(result.localStatePreserved)) {
+        assert.ok(witness.files > 8);
+        assert.ok(witness.bytes > 0);
+      }
       assert.deepEqual(result.faults.processCrashes, [
         "after-outbox",
         "after-hub-accept",
@@ -1129,6 +1172,14 @@ test("pseudo-fleet acceptance runs twice from fresh full-tree copies with one de
       results[1]?.workload.cassetteDigest,
     );
     assert.equal(results[0]?.workload.files, 64);
+    assert.deepEqual(
+      results[0]?.localStatePreserved,
+      results[1]?.localStatePreserved,
+    );
+    assert.notEqual(
+      results[0]?.localStatePreserved.mattbook?.digest,
+      results[0]?.localStatePreserved.wootbook?.digest,
+    );
     assert.equal(results[1]?.workload.directories, 8);
     assert.notEqual(results[0]?.sourceDigest, "");
     assert.equal(existsSync(runRoot), false);
