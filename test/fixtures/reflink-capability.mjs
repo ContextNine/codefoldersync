@@ -76,7 +76,7 @@ try {
   closeSync(fd);
   assert.ok(lstatSync(image).isFile() && !lstatSync(image).isSymbolicLink());
   // Format only this newly created image, never a block device or existing file.
-  command("mkfs.btrfs", ["--nodiscard", image]);
+  command("mkfs.btrfs", ["--mixed", "--nodiscard", image]);
   mkdirSync(mountpoint);
   command("mount", [
     "-t",
@@ -416,6 +416,7 @@ console.log(JSON.stringify(results));`;
   const candidateSha256 = createHash("sha256")
     .update(readFileSync(candidateArchive))
     .digest("hex");
+  ownTree(controllerFixture);
   const stressControl = join(root, "full-folder-stress-control.json");
   writeFileSync(
     stressControl,
@@ -474,7 +475,7 @@ console.log(JSON.stringify(results));`;
         "nsenter",
         "--mount",
         "--target",
-        "1",
+        String(process.pid),
         "setpriv",
         `--reuid=${uid}`,
         `--regid=${gid}`,
