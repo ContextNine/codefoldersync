@@ -120,9 +120,12 @@ try {
   const masterWitness = await createTreeWitness(master);
   const fullParent = join(root, "controller-master/Code");
   mkdirSync(fullParent, { recursive: true, mode: 0o700 });
-  for (const caseId of ["impression", "verascient"]) {
-    command("cp", ["-a", "--reflink=always", master, join(fullParent, caseId)]);
-  }
+  command("cp", [
+    "-a",
+    "--reflink=always",
+    master,
+    join(fullParent, "public-repository"),
+  ]);
   protect(fullParent);
   const parentWitness = await createTreeWitness(fullParent);
   const ciphertexts = join(root, "controller-ciphertexts");
@@ -191,6 +194,14 @@ try {
       runId: "public-controller-fixture",
       snapshotId,
       seed: "public-controller-mechanics",
+      cases: [
+        {
+          caseId: "default-branch",
+          sourceRelativePath: "public-repository",
+          defaultBranch: "master",
+        },
+        { caseId: "plaintext-env", sourceRelativePath: "public-repository" },
+      ],
       uid: control.uid,
       gid: process.getgid(),
       inheritedMountNamespace: readlinkSync("/proc/self/ns/mnt"),
@@ -244,6 +255,7 @@ try {
   );
   assert.equal(result.passed, true);
   assert.equal(result.acceptanceCorpus, false);
+  assert.equal(result.filesystemMetadataProfile, "single");
   assert.equal(result.unchangedParent, true);
   assert.deepEqual(result.parentWitness, parentWitness);
   assert.deepEqual(await createTreeWitness(fullParent), parentWitness);
@@ -293,6 +305,7 @@ try {
   for (const caseResult of result.cases) {
     assert.equal(caseResult.passed, true);
     assert.equal(caseResult.acceptanceCorpus, false);
+    assert.equal(caseResult.sourceRelativePath, "public-repository");
     results.push({
       caseId: caseResult.caseId,
       passed: true,

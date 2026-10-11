@@ -1,16 +1,23 @@
 # Complete archived-folder stress
 
-`scripts/run_full_folder_stress.mjs` exercises complete disposable Impression and
-Verascient folders after the original full-Code campaign passes. It does not
+`scripts/run_full_folder_stress.mjs` exercises complete disposable archived
+repositories under both policies after the original full-Code campaign passes. It does not
 register or edit live Code folders, install a default binary, or enable a service.
 The tested runtime comes from the exact accepted release archive, not the
 coordinator's source checkout.
 
-Impression uses `default-branch` with `master`. Verascient uses the explicitly
-approved plaintext ENV-only policy across different branches. The plaintext
-exception applies only to Verascient. Actual archived values stay inside private
-test workspaces, state, recovery, and the hub. Output contains counts, hashes,
-timings, and pass flags, never file contents or path manifests.
+Cases are named `default-branch` and `plaintext-env`, independently of their
+source folder. The controller's explicit `cases` list selects each complete
+`sourceRelativePath` below the restored Code parent and the default-branch
+case's `defaultBranch`. Both cases may use the same real archived repository.
+Future live Impression or Verascient configuration is not a test prerequisite.
+
+ENV stress transfers only generated synthetic values below the canary subtree
+and its moved destination. Archived ENV files remain present, local, and
+positively witnessed as unselected data. This does not extend the live
+Verascient plaintext exception to another workspace. Output contains source
+provenance, counts, hashes, timings, and pass flags, never file contents or path
+manifests.
 
 ## Required input
 
@@ -23,7 +30,7 @@ the actual restore and stress commands run as the registered unprivileged UID.
 The inner stress driver never formats or mounts storage.
 
 The controller requires the same-candidate original full-Code acceptance receipt
-and protected folder witnesses before allocating anything. Its specification
+before allocating anything. Its specification
 adds the Wootbook original `source` ciphertext and complete parent witness,
 `snapshotId`, protected `identityPath`, approved managed `downloadCommand`, and
 the physical historical `restoreScript` plus its SHA-256. It also supplies
@@ -32,6 +39,8 @@ non-overlapping `retainedRoots`, and page-aligned `maximumImageBytes`. It refuse
 Code write targets and a maximum image plus retained allocation and control
 reserve above 200 GiB. Do not launch while another bulk acceptance volume is
 active. Reinventory retained roots after the earlier controller finishes.
+Its new disposable image uses a verified `single` metadata profile, like the
+full-Code controller. Original ciphertext remains outside that image.
 
 The historical restore helper downloads and authenticates the entire original
 Wootbook Code archive into one reserved slot. No partial archive extraction or
@@ -51,8 +60,10 @@ removed by controller cleanup.
 
 The schema-version-1 specification supplies:
 
-- `caseId`, either `impression` or `verascient`; `corpus`, either
+- `caseId`, either `default-branch` or `plaintext-env`; `corpus`, either
   `complete-original-folder` or `public-fixture`.
+- The actual safe `sourceRelativePath` below the restored Code parent. The
+  default-branch case also supplies `defaultBranch`.
 - A physical `runRoot` with its matching `runId` sentinel and a fresh private
   `evidenceDirectory`.
 - `candidateArchive`, its `candidateSha256`, the extracted `packageRoot`, and
@@ -66,13 +77,13 @@ The schema-version-1 specification supplies:
 Real input requires at least 24 rounds per repetition and a successful original
 full-Code `originalAcceptanceReceipt` for the same candidate hash. It must name
 `originalSnapshotId: codefoldersync-backup-20260825T102132Z` and
-`originalMachineId: wootbook`. Extract the entire `Code/impression` and
-`Code/verascient` folders from that verified original ciphertext and match their
-protected subtree witnesses captured from the full parent restore. Supply the
-bounded `originalFolderWitnessReceipt` from that capture. Its original Wootbook
-parent witness must match the successful full-Code receipt, and its folder
-witness must match this input's `masterWitness`. Never replace
-them with current live copies, sampled files, or generated input.
+`originalMachineId: wootbook`. The controller authenticates and restores the
+entire original Code parent, then witnesses each selected complete subtree.
+Supply `originalMasterRoot` to the inner driver. It independently proves that
+the complete parent still matches the full-Code receipt and that `masterRoot`
+is exactly that parent's selected `sourceRelativePath`, not a replacement tree.
+Its subtree must match `masterWitness`. Never substitute current live copies,
+sampled files, or generated input for real-corpus acceptance.
 
 Public fixture input allows two rounds, has `acceptanceCorpus: false`, and cannot
 close an original-data gate. The storage validator still requires a protected
@@ -127,8 +138,8 @@ full-folder acceptance.
 
 The existing native storage fixture invokes
 `test/fixtures/full-folder-stress.mjs` for both policies through the complete
-controller lifecycle. Its protected complete public parent contains both
-folders, including an ignored malformed Git marker and failing Git hooks/filters
+controller lifecycle. Both policies use the same protected complete public
+repository, including an ignored malformed Git marker and failing Git hooks/filters
 to exercise safe staging and traversal. It encrypts that parent, restores it
 through the historical helper, runs both cases as an unprivileged peer inside a
 new nested private namespace, and checks the unchanged parent and ciphertext

@@ -108,6 +108,25 @@ async function validate() {
     readlinkSync("/proc/1/ns/mnt"),
   );
   assert.match(spec.candidateSha256, /^[a-f0-9]{64}$/u);
+  assert.ok(Array.isArray(spec.cases) && spec.cases.length === 2);
+  assert.deepEqual(spec.cases.map((entry) => entry.caseId).sort(), [
+    "default-branch",
+    "plaintext-env",
+  ]);
+  for (const entry of spec.cases) {
+    assert.ok(
+      typeof entry.sourceRelativePath === "string" &&
+        entry.sourceRelativePath.length > 0 &&
+        !isAbsolute(entry.sourceRelativePath) &&
+        !entry.sourceRelativePath.includes("\\") &&
+        !entry.sourceRelativePath.includes("\0") &&
+        entry.sourceRelativePath
+          .split("/")
+          .every((part) => part && part !== "." && part !== ".."),
+    );
+    if (entry.caseId === "default-branch")
+      assert.equal(typeof entry.defaultBranch, "string");
+  }
   assert.equal(await digest(spec.candidateArchive), spec.candidateSha256);
   assert.ok(
     Number.isSafeInteger(spec.maximumImageBytes) &&
@@ -176,16 +195,6 @@ async function validate() {
     );
     assert.ok(parentWitness);
     assert.deepEqual(parentWitness.witness, source.witness);
-    const scoped = readJson(spec.originalFolderWitnessReceipt);
-    assert.equal(scoped.parentFullTreeVerified, true);
-    assert.equal(scoped.snapshotId, spec.snapshotId);
-    assert.equal(scoped.sourceMachineId, "wootbook");
-    assert.equal(scoped.candidateSha256, spec.candidateSha256);
-    assert.deepEqual(scoped.parentWitness, source.witness);
-    assert.deepEqual(scoped.folders.map((folder) => folder.caseId).sort(), [
-      "impression",
-      "verascient",
-    ]);
   }
 }
 
@@ -228,6 +237,7 @@ async function controller() {
   let mounted = false;
   let passed = false;
   let result;
+  let filesystemMetadataProfile;
   try {
     writeFileSync(join(outer, "SENTINEL"), `${spec.runId}\n`, {
       mode: 0o600,
@@ -240,7 +250,7 @@ async function controller() {
     } finally {
       closeSync(fd);
     }
-    await command("mkfs.btrfs", ["--nodiscard", image]);
+    await command("mkfs.btrfs", ["--nodiscard", "--metadata", "single", image]);
     mkdirSync(mount, { mode: 0o700 });
     await command("mount", [
       "-t",
@@ -251,6 +261,9 @@ async function controller() {
       mount,
     ]);
     mounted = true;
+    const layout = await command("btrfs", ["filesystem", "df", "--raw", mount]);
+    filesystemMetadataProfile = layout.match(/^Metadata, (\w+):/mu)?.[1];
+    assert.equal(filesystemMetadataProfile, "single");
     chownSync(mount, spec.uid, spec.gid);
     const control = {
       ...spec,
@@ -329,6 +342,7 @@ async function controller() {
       schemaVersion: 1,
       passed,
       acceptanceCorpus: spec.corpus === "complete-original-folder",
+      filesystemMetadataProfile,
       cleaned: true,
       removedAllocatedBytes: cleaned.removedAllocatedBytes,
       ...(passed ? result : {}),
@@ -383,9 +397,10 @@ async function run() {
     chmodSync(join(template, "objects.sqlite"), 0o400);
     chmodSync(template, 0o500);
     const results = [];
-    for (const caseId of ["impression", "verascient"]) {
+    for (const entry of spec.cases) {
+      const { caseId, sourceRelativePath, defaultBranch } = entry;
       phase = `stress-${caseId}`;
-      const masterRoot = physical(join(fullMaster, caseId));
+      const masterRoot = physical(join(fullMaster, sourceRelativePath));
       const masterWitness = await createTreeWitness(masterRoot);
       const runId = `${spec.runId}-${caseId}`;
       const runRoot = join(stageRoot, `run-${caseId}-complete-stress`);
@@ -397,6 +412,8 @@ async function run() {
       const result = await runFullFolderStress({
         schemaVersion: 1,
         caseId,
+        sourceRelativePath,
+        defaultBranch,
         corpus: spec.corpus,
         runId,
         runRoot,
@@ -415,7 +432,7 @@ async function run() {
         ...(spec.corpus === "complete-original-folder"
           ? {
               originalAcceptanceReceipt: spec.originalAcceptanceReceipt,
-              originalFolderWitnessReceipt: spec.originalFolderWitnessReceipt,
+              originalMasterRoot: fullMaster,
               originalSnapshotId: spec.snapshotId,
               originalMachineId: "wootbook",
             }

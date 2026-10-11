@@ -48,7 +48,17 @@ export async function runFullFolderStress(spec) {
   process.env.GIT_CONFIG_NOSYSTEM = "1";
   process.env.GIT_OPTIONAL_LOCKS = "0";
   assert.equal(spec.schemaVersion, 1);
-  assert.ok(["impression", "verascient"].includes(spec.caseId));
+  assert.ok(["default-branch", "plaintext-env"].includes(spec.caseId));
+  assert.ok(
+    typeof spec.sourceRelativePath === "string" &&
+      spec.sourceRelativePath.length > 0 &&
+      !isAbsolute(spec.sourceRelativePath) &&
+      !spec.sourceRelativePath.includes("\\") &&
+      !spec.sourceRelativePath.includes("\0") &&
+      spec.sourceRelativePath
+        .split("/")
+        .every((part) => part && part !== "." && part !== ".."),
+  );
   assert.ok(
     ["complete-original-folder", "public-fixture"].includes(spec.corpus),
   );
@@ -112,27 +122,28 @@ export async function runFullFolderStress(spec) {
       "codefoldersync-backup-20260825T102132Z",
     );
     assert.equal(spec.originalMachineId, "wootbook");
-    const scoped = JSON.parse(
-      readFileSync(physical(spec.originalFolderWitnessReceipt), "utf8"),
-    );
-    assert.equal(scoped.parentFullTreeVerified, true);
-    assert.equal(scoped.snapshotId, spec.originalSnapshotId);
-    assert.equal(scoped.sourceMachineId, spec.originalMachineId);
-    assert.equal(scoped.candidateSha256, spec.candidateSha256);
     const parent = receipt.historicalTrees.find(
       (entry) => entry.machineId === spec.originalMachineId,
     );
     assert.ok(parent);
-    assert.deepEqual(scoped.parentWitness, parent.witness);
-    const folder = scoped.folders.find((entry) => entry.caseId === spec.caseId);
-    assert.ok(folder);
-    assert.equal(folder.archiveRoot, `Code/${spec.caseId}`);
-    assert.deepEqual(spec.masterWitness, folder.witness);
+    const parentRoot = physical(spec.originalMasterRoot);
+    assert.ok(parentRoot.startsWith(`${spec.storage.mountRoot}${sep}`));
+    assert.equal(lstatSync(parentRoot).mode & 0o222, 0);
+    assert.equal(master, join(parentRoot, spec.sourceRelativePath));
+    assert.deepEqual(await createTreeWitness(parentRoot), parent.witness);
   }
-  const syncPolicy =
-    spec.caseId === "impression"
-      ? { mode: "default-branch", branch: "master" }
-      : policy.plaintextEnvPolicy;
+  const defaultBranchOnly = spec.caseId === "default-branch";
+  // Only generated canary ENV values are transferable; archived ENV stays local.
+  const syncPolicy = defaultBranchOnly
+    ? { mode: "default-branch", branch: spec.defaultBranch }
+    : {
+        mode: "selected-files",
+        includes: [probeDirectory, `${probeDirectory}-moved`].flatMap(
+          (directory) => [`${directory}/**/.env`, `${directory}/**/.env.*`],
+        ),
+        plaintextEnv: true,
+      };
+  policy.validateSyncPolicy(syncPolicy);
   const beforeMaster = await createTreeWitness(master);
   assert.deepEqual(beforeMaster, spec.masterWitness);
   storage.validateCleanupRunRoot(run);
@@ -235,8 +246,9 @@ export async function runFullFolderStress(spec) {
         assert.ok(branchQuery.status === 0 || branchQuery.status === 1);
         const currentBranch =
           branchQuery.status === 0 ? branchQuery.stdout.trim() : null;
-        const branch =
-          spec.caseId === "impression" ? "master" : `codex/stress-${name}`;
+        const branch = defaultBranchOnly
+          ? syncPolicy.branch
+          : `codex/stress-${name}`;
         if (currentBranch !== branch) {
           git(peer, ["branch", "--force", branch, "HEAD"]);
           git(peer, ["symbolic-ref", "HEAD", `refs/heads/${branch}`]);
@@ -373,7 +385,7 @@ export async function runFullFolderStress(spec) {
         );
       const cassette = [];
       const leaf = (suffix) =>
-        `${probeDirectory}/${spec.caseId === "verascient" ? ".env." : ""}${suffix}${spec.caseId === "impression" ? ".txt" : ""}`;
+        `${probeDirectory}/${defaultBranchOnly ? "" : ".env."}${suffix}${defaultBranchOnly ? ".txt" : ""}`;
       const bytes = (label) =>
         Buffer.from(`CODEFOLDERSYNC_STRESS=${hash(`${spec.seed}:${label}`)}\n`);
       const write = (peer, path, value, fresh = false) => {
@@ -516,7 +528,7 @@ export async function runFullFolderStress(spec) {
         source,
         loadConfig(source.configPath),
       );
-      if (spec.caseId === "impression") {
+      if (defaultBranchOnly) {
         assert.equal(switched.published, false);
         for (const peer of peers.slice(1))
           assert.equal(existsSync(join(peer.root, branchPath)), false);
@@ -529,7 +541,7 @@ export async function runFullFolderStress(spec) {
       git(source, [
         "symbolic-ref",
         "HEAD",
-        `refs/heads/${spec.caseId === "impression" ? "master" : "codex/stress-source"}`,
+        `refs/heads/${defaultBranchOnly ? syncPolicy.branch : "codex/stress-source"}`,
       ]);
       expectedGit.set(
         source.machineId,
@@ -651,7 +663,7 @@ export async function runFullFolderStress(spec) {
         cassetteDigest: hash(JSON.stringify(cassette)),
         fullMaster: beforeMaster,
         policy: syncPolicy.mode,
-        distinctBranches: spec.caseId === "verascient",
+        distinctBranches: !defaultBranchOnly,
         localGitAndUnselectedBytesPreserved: true,
         gitFsckPassed: true,
         conflictBytesPreserved: true,
@@ -677,6 +689,7 @@ export async function runFullFolderStress(spec) {
     const result = {
       schemaVersion: 1,
       caseId: spec.caseId,
+      sourceRelativePath: spec.sourceRelativePath,
       acceptanceCorpus: spec.corpus === "complete-original-folder",
       candidateSha256: spec.candidateSha256,
       originalSnapshotId: spec.originalSnapshotId,
