@@ -122,6 +122,15 @@ recovery after outbox persistence and hub acceptance, policy-specific branch
 transitions, native ENOSPC/EIO recovery, corruption rejection, and interrupted
 subtree-move recovery without object upload.
 
+Both policies also exercise delete/restore, delete/edit, edit/delete, move/delete,
+move/move, and move/edit against the complete retained repository background.
+Deletion and restoration must retain a catalog tombstone, an actual
+`restore-entry` event, and the prior immutable bytes. Concurrent losing edits
+and moves must retain exact visible bytes on every peer and recover the same
+bytes privately from immutable conflict evidence. Conflict records preserve
+rejected deletion intent; concurrent moves and edits compose into the canonical
+destination. Every scenario preserves the peer's local Git-state witness.
+
 Final force verification covers every peer's included namespace at the same hub
 sequence. A no-change sync must publish nothing and transfer zero objects. Each
 peer's original Git metadata and all unselected or ignored bytes must match its
@@ -148,3 +157,9 @@ not certify an original archive or overall fleet capacity.
 A second controller invocation corrupts only its fresh downloaded ciphertext.
 It must reject before stress, remove the exact failed volume, and retain the
 original fixture ciphertext unchanged.
+
+Failed child commands propagate only a bounded phase, source module/line, and
+recognized error-code record. Preserve that sanitized record in the external
+controller receipt before exact cleanup. Do not retain raw stderr, assertion
+messages, paths, or file bytes. A generic outer command failure must not hide
+the actual inner structural assertion.

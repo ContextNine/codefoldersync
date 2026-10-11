@@ -449,6 +449,7 @@ export async function runFullFolderStress(spec) {
         assert.equal(marker.point, point);
       };
       for (let round = 0; round < spec.rounds; round++) {
+        phase = `round-${round}`;
         const started = performance.now();
         const writer = peers[round % peers.length];
         const path = leaf(`round-${round}`);
@@ -460,6 +461,7 @@ export async function runFullFolderStress(spec) {
         timings.push(Math.round(performance.now() - started));
       }
       const concurrentPath = leaf("concurrent");
+      phase = "concurrent-edit";
       write(source, concurrentPath, bytes("initial-concurrent"), true);
       await converge();
       const first = bytes("first-concurrent"),
@@ -480,7 +482,178 @@ export async function runFullFolderStress(spec) {
                 hash(losing),
             ),
         );
+      const { HubStore } = await module("hub");
+      const normalConflicts = () => {
+        const hub = new HubStore(fleet.hub.path);
+        try {
+          return hub
+            .conflicts(config.folderId)
+            .filter((record) => record.kind === "normal");
+        } finally {
+          hub[Symbol.dispose]();
+        }
+      };
+      const remove = (peer, path) => {
+        unlinkSync(join(peer.root, path));
+        cassette.push({
+          operation: "delete",
+          peer: peer.machineId,
+          pathHash: hash(path),
+        });
+      };
+      const move = (peer, from, to) => {
+        renameSync(join(peer.root, from), join(peer.root, to));
+        cassette.push({
+          operation: "move",
+          peer: peer.machineId,
+          fromHash: hash(from),
+          toHash: hash(to),
+        });
+      };
+      const proveAbsent = (path) => {
+        for (const peer of peers)
+          assert.equal(existsSync(join(peer.root, path)), false);
+      };
+      const proveNewConflict = async (previous, expectedBytes) => {
+        const targetConfig = loadConfig(target.configPath);
+        const record = normalConflicts().find(
+          (entry) =>
+            !previous.has(entry.conflictId) &&
+            entry.peerId === targetConfig.peerId,
+        );
+        assert.ok(
+          record,
+          "Concurrent structural intent lacks conflict evidence",
+        );
+        if (expectedBytes !== undefined) {
+          assert.ok(record.manifestId);
+          for (const peer of peers)
+            assert.ok(
+              readdirSync(join(peer.root, probeDirectory)).some(
+                (name) =>
+                  name.includes("CODEFOLDERSYNC-CONFLICT") &&
+                  lstatSync(join(peer.root, probeDirectory, name)).isFile() &&
+                  hash(readFileSync(join(peer.root, probeDirectory, name))) ===
+                    hash(expectedBytes),
+              ),
+              "Concurrent structural bytes were not retained on every peer",
+            );
+          const recovered = join(
+            target.stateDir,
+            `structural-recovered-${hash(expectedBytes)}.txt`,
+          );
+          await executor.recoverAcceptanceConflict(
+            target,
+            targetConfig,
+            childRun,
+            record.conflictId,
+            recovered,
+          );
+          assert.equal(hash(readFileSync(recovered)), hash(expectedBytes));
+        }
+      };
+      const structuralMatrix = [];
+      phase = "matrix-delete-restore";
+      const restorePath = leaf("delete-restore");
+      const restoreBytes = bytes("delete-restore");
+      write(source, restorePath, restoreBytes, true);
+      await converge();
+      remove(source, restorePath);
+      await converge();
+      proveAbsent(restorePath);
+      for (const peer of peers) {
+        const database = new DatabaseSync(join(peer.stateDir, "state.sqlite"), {
+          readOnly: true,
+        });
+        try {
+          assert.ok(
+            database
+              .prepare(
+                "SELECT COUNT(*) AS count FROM catalog_history WHERE tombstone=1 AND json_extract(json,'$.path')=?",
+              )
+              .get(restorePath).count > 0,
+          );
+        } finally {
+          database.close();
+        }
+      }
+      write(source, restorePath, restoreBytes, true);
+      await converge();
+      prove(restorePath, restoreBytes);
+      const historyHub = new HubStore(fleet.hub.path);
+      try {
+        assert.ok(
+          historyHub
+            .history(config.folderId)
+            .some(
+              (event) =>
+                typeof event.mutations_json === "string" &&
+                JSON.parse(event.mutations_json).some(
+                  (mutation) => mutation.kind === "restore-entry",
+                ),
+            ),
+        );
+        assert.equal(
+          hash(historyHub.objects.get(hash(restoreBytes))),
+          hash(restoreBytes),
+        );
+      } finally {
+        historyHub[Symbol.dispose]();
+      }
+      structuralMatrix.push("delete-restore");
+
+      for (const operation of [
+        "delete-edit",
+        "edit-delete",
+        "move-delete",
+        "move-move",
+        "move-edit",
+      ]) {
+        phase = `matrix-${operation}`;
+        const path = leaf(operation);
+        const moved = leaf(`${operation}-moved`);
+        const losingMove = leaf(`${operation}-other-move`);
+        const initial = bytes(`${operation}-initial`);
+        const edit = bytes(`${operation}-edit`);
+        write(source, path, initial, true);
+        await converge();
+        const previous = new Set(
+          normalConflicts().map((record) => record.conflictId),
+        );
+        if (operation === "delete-edit") {
+          remove(source, path);
+          write(target, path, edit);
+        } else if (operation === "edit-delete") {
+          write(source, path, edit);
+          remove(target, path);
+        } else {
+          move(source, path, moved);
+          if (operation === "move-delete") remove(target, path);
+          else if (operation === "move-move") move(target, path, losingMove);
+          else write(target, path, edit);
+        }
+        await sync(source);
+        await sync(target);
+        await converge();
+        if (operation === "delete-edit") {
+          proveAbsent(path);
+          await proveNewConflict(previous, edit);
+        } else if (operation === "edit-delete") {
+          prove(path, edit);
+          await proveNewConflict(previous);
+        } else {
+          proveAbsent(path);
+          prove(moved, operation === "move-edit" ? edit : initial);
+          if (operation === "move-move")
+            await proveNewConflict(previous, initial);
+          else if (operation === "move-delete")
+            await proveNewConflict(previous);
+        }
+        await unchangedGit();
+        structuralMatrix.push(operation);
+      }
       const offlinePath = leaf("offline");
+      phase = "hub-offline";
       const heldHub = `${fleet.hub.path}-offline`;
       renameSync(fleet.hub.path, heldHub);
       const marker = "full-folder-hub-offline\n";
@@ -510,6 +683,7 @@ export async function runFullFolderStress(spec) {
       await converge();
       prove(offlinePath, bytes("offline"));
       for (const point of ["after-outbox", "after-hub-accept"]) {
+        phase = `crash-${point}`;
         const path = leaf(point);
         write(source, path, bytes(point), true);
         await crash(source, point);
@@ -517,6 +691,7 @@ export async function runFullFolderStress(spec) {
         prove(path, bytes(point));
       }
       const branchPath = leaf("branch-transition");
+      phase = "branch-transition";
       git(source, ["branch", "--force", "codex/stress-switch", "HEAD"]);
       git(source, ["symbolic-ref", "HEAD", "refs/heads/codex/stress-switch"]);
       expectedGit.set(
@@ -550,6 +725,7 @@ export async function runFullFolderStress(spec) {
       await converge();
       prove(branchPath, bytes("branch-transition"));
       for (const fault of ["enospc-write", "eio-fsync"]) {
+        phase = `native-${fault}`;
         const path = leaf(fault);
         const prior = bytes(`${fault}-prior`),
           desired = bytes(`${fault}-desired`);
@@ -577,6 +753,7 @@ export async function runFullFolderStress(spec) {
         assert.equal(hash(readFileSync(recovered)), hash(prior));
       }
       const corruptionPath = leaf("corruption");
+      phase = "corruption";
       const corruptionBytes = bytes("fresh-corruption");
       write(source, corruptionPath, corruptionBytes, true);
       await sync(source);
@@ -612,6 +789,7 @@ export async function runFullFolderStress(spec) {
       await converge();
       prove(corruptionPath, corruptionBytes);
       const movedDirectory = `${probeDirectory}-moved`;
+      phase = "directory-move";
       renameSync(
         join(source.root, probeDirectory),
         join(source.root, movedDirectory),
@@ -628,6 +806,7 @@ export async function runFullFolderStress(spec) {
       );
       await unchangedGit();
       let sequence;
+      phase = "final-verification";
       for (const peer of peers) {
         const verified = await executor.verify(
           peer,
@@ -667,6 +846,9 @@ export async function runFullFolderStress(spec) {
         localGitAndUnselectedBytesPreserved: true,
         gitFsckPassed: true,
         conflictBytesPreserved: true,
+        structuralMatrix,
+        structuralConflictBytesPrivatelyRecovered: true,
+        restoredTombstoneAndImmutableBytesPreserved: true,
         offlineEditRecovered: true,
         processCrashRestartPassed: true,
         branchTransitionPassed: true,
@@ -683,6 +865,7 @@ export async function runFullFolderStress(spec) {
       });
       storage.cleanupRunRoot(childRun);
     }
+    phase = "final-master-witness";
     assert.deepEqual(await createTreeWitness(master), beforeMaster);
     assert.equal(results[0].cassetteDigest, results[1].cassetteDigest);
     mkdirSync(spec.evidenceDirectory, { mode: 0o700 });
@@ -702,6 +885,26 @@ export async function runFullFolderStress(spec) {
       { mode: 0o600, flag: "wx" },
     );
     return result;
+  } catch (error) {
+    const location = String(error?.stack).match(
+      /run_full_folder_stress\.mjs:(\d+)/u,
+    );
+    const failure = {
+      phase,
+      module: "run_full_folder_stress.mjs",
+      line: Number(location?.[1] ?? 0),
+      code: ["ERR_ASSERTION", "ENOSPC", "EIO", "EACCES", "EPERM"].includes(
+        error?.code,
+      )
+        ? error.code
+        : "unknown",
+    };
+    process.stderr.write(
+      `CFS_FOLDER_STRESS_FAILURE ${JSON.stringify(failure)}\n`,
+    );
+    throw new Error("Full-folder stress failed", {
+      cause: { folderStressFailure: failure, originalError: error },
+    });
   } finally {
     storage.cleanupRunRoot(run);
   }

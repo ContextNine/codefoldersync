@@ -35,7 +35,7 @@ const command = (program, args) => {
   const result = spawnSync(program, args, { env, encoding: "utf8" });
   const coarse =
     result.stderr?.match(
-      /Archived folder stress failed at [a-z0-9-]+ \(line \d+\)\./u,
+      /CFS_FOLDER_STRESS_FAILURE \{"phase":"[a-z0-9-]+","module":"run_(?:full|archived)_folder_stress\.mjs","line":\d+,"code":"(?:ERR_ASSERTION|ENOSPC|EIO|EACCES|EPERM|unknown)"\}/u,
     )?.[0] ?? "";
   assert.equal(result.status, 0, `Public mechanics command failed. ${coarse}`);
   return result.stdout;
@@ -306,6 +306,21 @@ try {
     assert.equal(caseResult.passed, true);
     assert.equal(caseResult.acceptanceCorpus, false);
     assert.equal(caseResult.sourceRelativePath, "public-repository");
+    for (const repetition of caseResult.results) {
+      assert.deepEqual(repetition.structuralMatrix, [
+        "delete-restore",
+        "delete-edit",
+        "edit-delete",
+        "move-delete",
+        "move-move",
+        "move-edit",
+      ]);
+      assert.equal(repetition.structuralConflictBytesPrivatelyRecovered, true);
+      assert.equal(
+        repetition.restoredTombstoneAndImmutableBytesPreserved,
+        true,
+      );
+    }
     results.push({
       caseId: caseResult.caseId,
       passed: true,

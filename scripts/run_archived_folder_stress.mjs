@@ -34,6 +34,55 @@ let phase = "preflight";
 let interrupted = false;
 let spec;
 const reserve = 64 * 1024 ** 2;
+const failurePrefix = "CFS_FOLDER_STRESS_FAILURE ";
+function failureRecord(error) {
+  if (error?.cause?.folderStressFailure) return error.cause.folderStressFailure;
+  const location = String(error?.stack).match(
+    /(run_(?:full|archived)_folder_stress\.mjs):(\d+)/u,
+  );
+  return {
+    phase,
+    module: location?.[1] ?? "run_archived_folder_stress.mjs",
+    line: Number(location?.[2] ?? 0),
+    code: ["ERR_ASSERTION", "ENOSPC", "EIO", "EACCES", "EPERM"].includes(
+      error?.code,
+    )
+      ? error.code
+      : "unknown",
+  };
+}
+function readFailure(line) {
+  if (!line.startsWith(failurePrefix)) return undefined;
+  try {
+    const value = JSON.parse(line.slice(failurePrefix.length));
+    if (
+      !/^[a-z0-9-]+$/u.test(value.phase) ||
+      ![
+        "run_full_folder_stress.mjs",
+        "run_archived_folder_stress.mjs",
+      ].includes(value.module) ||
+      !Number.isSafeInteger(value.line) ||
+      value.line < 0 ||
+      ![
+        "ERR_ASSERTION",
+        "ENOSPC",
+        "EIO",
+        "EACCES",
+        "EPERM",
+        "unknown",
+      ].includes(value.code)
+    )
+      return undefined;
+    return {
+      phase: value.phase,
+      module: value.module,
+      line: value.line,
+      code: value.code,
+    };
+  } catch {
+    return undefined;
+  }
+}
 const physical = (path) => {
   assert.ok(
     typeof path === "string" && isAbsolute(path) && resolve(path) === path,
@@ -75,13 +124,24 @@ async function command(program, args, options = {}) {
     bytes += part.length;
     if (bytes <= 1024 ** 2) chunks.push(part);
   });
-  child.stderr.on("data", () => {});
+  let childFailure;
+  let pending = "";
+  child.stderr.on("data", (part) => {
+    pending += part.toString("utf8");
+    if (pending.length > 8192) pending = "";
+    const lines = pending.split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) childFailure = readFailure(line) ?? childFailure;
+  });
   try {
     const status = await new Promise((done, reject) => {
       child.once("error", reject);
       child.once("close", done);
     });
-    assert.equal(status, 0, "Private stress command failed");
+    if (status !== 0)
+      throw new Error("Private stress command failed", {
+        cause: { folderStressFailure: childFailure ?? failureRecord({}) },
+      });
     assert.ok(bytes <= 1024 ** 2, "Private stress output exceeded its bound");
     assert.equal(interrupted, false, "Controller interrupted");
     return Buffer.concat(chunks).toString("utf8");
@@ -238,6 +298,7 @@ async function controller() {
   let passed = false;
   let result;
   let filesystemMetadataProfile;
+  let failure;
   try {
     writeFileSync(join(outer, "SENTINEL"), `${spec.runId}\n`, {
       mode: 0o600,
@@ -327,6 +388,9 @@ async function controller() {
     result.imageAllocatedBytes = lstatSync(image).blocks * 512;
     result.maximumTotalBytes = maximumTotalBytes;
     passed = true;
+  } catch (error) {
+    failure = failureRecord(error);
+    throw error;
   } finally {
     assert.equal(children.size, 0);
     interrupted = false;
@@ -345,6 +409,7 @@ async function controller() {
       filesystemMetadataProfile,
       cleaned: true,
       removedAllocatedBytes: cleaned.removedAllocatedBytes,
+      ...(failure ? { failure } : {}),
       ...(passed ? result : {}),
     });
   }
@@ -480,11 +545,8 @@ try {
   if (role === "controller") await controller();
   else await run();
 } catch (error) {
-  const line =
-    String(error.stack).match(/run_archived_folder_stress\.mjs:(\d+)/u)?.[1] ??
-    "0";
   process.stderr.write(
-    `Archived folder stress failed at ${phase} (line ${line}).\n`,
+    `${failurePrefix}${JSON.stringify(failureRecord(error))}\n`,
   );
   process.exitCode = 1;
 }
