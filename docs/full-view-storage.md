@@ -136,6 +136,17 @@ Each of the three source records declares its exact archive name, ciphertext byt
 
 Use the maintained Rclone controller as `downloadCommand`, for example an absolute Python executable and the installed or maintained `rclone_google_drive.py` path. The runner adds `download --machine-id wootbook --source-machine-id … --snapshot-id … --destination … --approve`. It never enumerates another hierarchy or copies credentials. The downloader must return its verified JSON receipt only after all transfer children have exited.
 
+After the original Drive recovery gates pass, later test attempts may populate
+the same disposable slots from the exact retained ciphertext bundles. Record
+that explicit transport and its hash-pinned run-scoped adapter beside the
+controller input; do not describe the attempt as a fresh Google Drive download.
+The adapter must allow only the three accepted physical bundles, compare their
+flat ciphertext witnesses, create only the matching run's fresh sentinel slot,
+and verify the copied ciphertext before returning. The controller independently
+rehashes it and authenticates the complete restore as usual. Never regenerate a
+live archive, copy credentials, or weaken tree/storage checks to avoid a locked
+credential store. Prior Drive acceptance remains separately evidenced.
+
 Downloads occupy fresh sentinel-qualified slots outside the private mounted filesystem. This allows a credential broker in another mount namespace to reach the same destination. Only one slot exists at a time. The image initially reserves the largest source ciphertext size plus 64 MiB slot overhead **outside** its own maximum size, in addition to retained allocation and the normal 64 MiB control reserve. Check actual slot allocation against that declared bound. Once a download returns, independently compare its exact flat witness, archive size, and full ciphertext SHA-256. Stream age, zstd, and native tar into the private volume without writing a plaintext tar file. Permit only the documented BSD metadata-key warnings, protect the complete restored Code tree, and compare every historical witness field. Reject incomplete streams, unexpected entries, unsafe physical roots, unsupported objects, nested mounts, or tree divergence.
 
 Remove only that new downloaded slot after its processes exit. The original ciphertext and identity are never copied into a cleanup target. After all three slots are gone, grow only the run-owned image and its matching loop capacity, before building the template or starting any product repetition. The final fixed image size plus freshly inventoried retained roots and control reserve must pass the product budget. No resize occurs during product execution. Insufficient compression or filesystem space fails the full campaign; no path or byte is omitted to make it fit.
