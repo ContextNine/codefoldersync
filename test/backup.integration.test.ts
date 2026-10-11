@@ -50,6 +50,13 @@ test("backup capture seals an encrypted archive and portable semantic oracle", a
     const sparse = openSync(join(source, "sparse.bin"), "wx", 0o600);
     writeSync(sparse, Buffer.from("tail"), 0, 4, 1024 * 1024);
     closeSync(sparse);
+    const longSparse = openSync(
+      join(source, "repo", `${"sparse-".repeat(20)}.bin`),
+      "wx",
+      0o600,
+    );
+    writeSync(longSparse, Buffer.from("tail"), 0, 4, 1024 * 1024);
+    closeSync(longSparse);
     run("git", ["init", "-q"], source);
     run("git", ["config", "user.name", "Fixture"], source);
     run("git", ["config", "user.email", "fixture@example.invalid"], source);
@@ -83,6 +90,10 @@ test("backup capture seals an encrypted archive and portable semantic oracle", a
       probeMembers,
     );
     assert.match(firstMetadata, /^[a-f0-9]{64}$/u);
+    assert.equal(
+      await createArchiveMetadataDigest(source, "linux", probeMembers),
+      firstMetadata,
+    );
     if (process.platform === "linux") {
       setLinuxXattr(join(source, "repo", "index.ts"), "omega-proof");
       assert.notEqual(

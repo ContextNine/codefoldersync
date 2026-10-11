@@ -16,6 +16,21 @@ pnpm build
 
 `pnpm check` runs formatting validation, strict TypeScript, and the complete repository test suite. For iteration, run the focused V3 file directly, then run the full gate.
 
+When an active acceptance controller depends on the checkout's compiled helpers,
+check an exact disposable source copy instead of rebuilding those helpers in
+place. Run test files serially with `tsx --test --test-concurrency=1` when needed
+to bound temporary allocation. This changes scheduling, not assertions or corpus.
+Count the copied source and every temporary directory against the active budget.
+
+Large test temporaries may live in an existing private bounded volume, but the
+native systemd fixture's paths must remain visible to the host user manager.
+Set `CODEFOLDERSYNC_TEST_NATIVE_CONTROL_ROOT` and
+`CODEFOLDERSYNC_TEST_NATIVE_CONTROL_RUN_ID` to a fresh physical sentinel-qualified
+host-visible control root outside Code. The existing systemd test validates that
+root, creates only its own small child, and removes its child afterward. Other
+tests continue to use `TMPDIR`. A missing or mismatched supplied sentinel fails
+the native fixture, rather than disabling the platform check.
+
 ## Focused proof rules
 
 Keep `test/product.integration.test.ts` at ten tests or fewer. Prefer a complete setup-to-hub-to-adoption-to-apply case over unit tests of private helper shapes or wording.

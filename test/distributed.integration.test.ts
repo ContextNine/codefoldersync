@@ -8,12 +8,13 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, platform, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import {
@@ -54,6 +55,7 @@ import {
 import { capturePath, ObjectStore } from "../src/v3/objects.js";
 import { semanticDigest } from "../src/v3/catalog.js";
 import type { CatalogEntry, NamespaceManifest } from "../src/v3/types.js";
+import { validateCleanupRunRoot } from "../src/v3/storage.js";
 
 test("distributed setup previews, prepares, resumes, and applies one approved target at a time", async () => {
   const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-distributed-"));
@@ -419,7 +421,25 @@ test(
       }).status !== 0,
   },
   async () => {
-    const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-systemd-"));
+    const nativeControlRoot =
+      process.env.CODEFOLDERSYNC_TEST_NATIVE_CONTROL_ROOT;
+    if (nativeControlRoot !== undefined) {
+      validateCleanupRunRoot({
+        schemaVersion: 1,
+        runId: process.env.CODEFOLDERSYNC_TEST_NATIVE_CONTROL_RUN_ID ?? "",
+        runRoot: nativeControlRoot,
+      });
+      assert.equal(realpathSync(nativeControlRoot), resolve(nativeControlRoot));
+      assert.equal(
+        nativeControlRoot
+          .split(sep)
+          .some((part) => part.toLowerCase() === "code"),
+        false,
+      );
+    }
+    const base = mkdtempSync(
+      join(nativeControlRoot ?? tmpdir(), "codefoldersync-v3-systemd-"),
+    );
     const releaseSha256 = "f".repeat(64);
     const binary = installBinary(base, releaseSha256);
     const root = join(base, "Code");

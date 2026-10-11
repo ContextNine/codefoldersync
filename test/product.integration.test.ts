@@ -1660,7 +1660,8 @@ scenario(
     });
 
     await context.test("Unix socket", async () => {
-      const base = mkdtempSync(join(tmpdir(), "codefoldersync-v3-socket-"));
+      // Leave room for a controller-owned TMPDIR within the Unix socket limit.
+      const base = mkdtempSync(join(tmpdir(), "s-"));
       const root = join(base, "code");
       const stateDir = join(base, "state");
       mkdirSync(root, { recursive: true });
@@ -1673,7 +1674,7 @@ scenario(
         backupWitness: "test-fixture",
       });
       using objects = new ObjectStore(join(stateDir, "objects"));
-      const socketPath = join(root, "unsafe.socket");
+      const socketPath = join(root, "s");
       const server = createServer();
       try {
         await new Promise<void>((resolveListen, rejectListen) => {

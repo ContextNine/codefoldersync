@@ -968,8 +968,14 @@ export class TarMetadataHasher extends Transform {
     const headerName = tarText(header.subarray(0, 100));
     const prefix = tarText(header.subarray(345, 500));
     const storedPath = prefix === "" ? headerName : `${prefix}/${headerName}`;
+    // GNU sparse headers use a PID-bearing transport name. Only the PAX sparse
+    // name identifies the restored file, including when a long path is present.
+    const sparseName = pax.get("GNU.sparse.name");
     const path = normalizedTarText(
-      pax.get("path") ?? this.#longPath ?? Buffer.from(storedPath, "utf8"),
+      sparseName ??
+        pax.get("path") ??
+        this.#longPath ??
+        Buffer.from(storedPath, "utf8"),
     );
     const link = normalizedTarText(
       pax.get("linkpath") ??
@@ -977,7 +983,10 @@ export class TarMetadataHasher extends Transform {
         Buffer.from(tarText(header.subarray(157, 257)), "utf8"),
     );
     const attributes = [...pax.entries()]
-      .filter(([key]) => includedPaxKey(key))
+      .filter(
+        ([key]) =>
+          includedPaxKey(key) && !(sparseName !== undefined && key === "path"),
+      )
       .map(
         ([key, value]) =>
           [

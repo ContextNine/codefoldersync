@@ -415,6 +415,37 @@ console.log(JSON.stringify(results));`;
   const candidateSha256 = createHash("sha256")
     .update(readFileSync(candidateArchive))
     .digest("hex");
+  const stressControl = join(root, "full-folder-stress-control.json");
+  writeFileSync(
+    stressControl,
+    JSON.stringify({
+      uid,
+      runId: sentinel.trim(),
+      outer: root,
+      image,
+      mount: mountpoint,
+      maximumImageBytes: 256 * 1024 ** 2,
+      inheritedMountNamespace: inheritedNamespace,
+      retainedRoots: [controllerFixture, residue],
+      candidateArchive,
+      candidateSha256,
+      nativeFaultLibrary,
+    }),
+    { mode: 0o600 },
+  );
+  chownSync(stressControl, uid, gid);
+  const stressMechanics = JSON.parse(
+    command("setpriv", [
+      `--reuid=${uid}`,
+      `--regid=${gid}`,
+      "--clear-groups",
+      process.execPath,
+      join(fixtureDirectory, "full-folder-stress.mjs"),
+      stressControl,
+    ]),
+  );
+  assert.equal(stressMechanics.originalArchiveAcceptance, false);
+  assert.equal(stressMechanics.publicDriverMechanics.length, 2);
   const controllerSpec = join(controllerFixture, "controller-spec.json");
   writeFileSync(
     controllerSpec,
@@ -542,6 +573,7 @@ console.log(JSON.stringify(results));`;
       materializedAfter,
       imageAllocatedBytes,
       boundedRunnerRepetitions: results.length,
+      fullFolderStressMechanics: stressMechanics.publicDriverMechanics,
       boundedRunnerConverged: true,
       boundedRunnerCleanup: true,
       objectsPreseeded: true,

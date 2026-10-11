@@ -50,6 +50,7 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 | Operator workflow                      | [Operations](operations.md)                           |
 | Executable acceptance                  | [Acceptance scenarios](acceptance-scenarios.md)       |
 | Bounded full-folder test storage       | [Full-view storage](full-view-storage.md)             |
+| Complete archived-folder stress        | [Full-folder stress](full-folder-stress.md)           |
 | Maintainer workflow                    | [Development](development.md)                         |
 
 ## Source ownership
@@ -72,6 +73,7 @@ The synchronized unit is one recursive included namespace. Git repositories are 
 | `src/v3/acceptance-faults.ts`                 | Full-corpus crash, move, conflict, outage, corruption, and native I/O scenarios |
 | `src/v3/acceptance-reflink.ts`                | Private bounded-volume validation and immutable object seeding                  |
 | `scripts/run_bounded_archived_acceptance.mjs` | Sequential historical Drive restores and bounded full-tree runner lifecycle     |
+| `scripts/run_full_folder_stress.mjs`          | Complete archived-folder policy stress and local Git-state proof                |
 | `src/v3/backup.ts`                            | Streaming encrypted capture and portable/platform recovery oracles              |
 | `src/v3/isolated.ts`                          | Three-machine SSH, native service, replay, and timing execution                 |
 | `src/v3/visibility.ts`                        | Hashed AI path-state observation for controller-owned timing                    |
