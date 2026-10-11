@@ -188,11 +188,7 @@ export async function runFullFolderStress(spec) {
         const previousIgnore = existsSync(ignorePath)
           ? readFileSync(physical(ignorePath), "utf8")
           : ignoreModule.defaultIgnore;
-        writeFileSync(
-          ignorePath,
-          `${previousIgnore.trimEnd()}\n/node_modules/\n`,
-          { mode: 0o600 },
-        );
+        writeFileSync(ignorePath, previousIgnore, { mode: 0o600 });
         const home = join(repetitionRoot, name, "home");
         mkdirSync(home, { mode: 0o700 });
         peer.env = {

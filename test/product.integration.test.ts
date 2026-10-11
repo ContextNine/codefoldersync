@@ -193,6 +193,13 @@ scenario(
           ),
           `${target.name} ignored dependency\n`,
         );
+        assert.equal(
+          readFileSync(
+            join(target.config.root, "node_modules", "local.txt"),
+            "utf8",
+          ),
+          `${target.name} root dependency\n`,
+        );
         const conflicts = (await statusV3(target.config)).conflicts.filter(
           (conflict) => conflict.peerId === target.config.peerId,
         );
@@ -880,8 +887,16 @@ scenario(
         join(beta.root, "clients", "app", "node_modules", "local.txt"),
         "still ignored\n",
       );
+      writeFileSync(
+        join(beta.root, "node_modules", "local.txt"),
+        "local root edit\n",
+      );
       const ignored = await syncFolderV3(beta);
       assert.equal(ignored.published, false, JSON.stringify(ignored));
+      assert.equal(
+        readFileSync(join(beta.root, "node_modules", "local.txt"), "utf8"),
+        "local root edit\n",
+      );
 
       writeFileSync(
         join(authority.root, "was-included.tmp"),
@@ -2098,6 +2113,15 @@ function createSourceTree(root: string): void {
 }
 
 function createTargetTree(root: string, name: "beta" | "gamma"): void {
+  mkdirSync(join(root, "node_modules", "example"), { recursive: true });
+  writeFileSync(
+    join(root, "node_modules", "local.txt"),
+    `${name} root dependency\n`,
+  );
+  writeFileSync(
+    join(root, "node_modules", "example", ".git"),
+    "ignored malformed Git marker\n",
+  );
   mkdirSync(join(root, "deep"), { recursive: true });
   mkdirSync(join(root, ".workspace-sync"), { recursive: true });
   writeFileSync(join(root, "notes.txt"), `${name} divergent notes\n`);

@@ -82,18 +82,17 @@ it does not preseed objects from that template.
 ## Scoped ignore projection
 
 Every disposable peer retains the entire folder, including dependencies and
-machine-local Git metadata. The runner adds an explicit `/node_modules/` ignore
-rule to each peer's existing ignore source before authority setup. The current
-`**/node_modules/` default matches nested paths but does not exclude a direct
-repository-root `node_modules`. Ignored bytes remain present and witnessed; they
-are not trimmed or synchronized.
+machine-local Git metadata. The runner preserves the master folder's existing
+ignore source, or writes the exact generated default when none exists. The
+`**/node_modules/` default excludes both direct-root and nested dependencies.
+Ignored bytes remain present and witnessed; they are not trimmed or synchronized.
 
 Activation uses the packaged `setup --mode activate --ignore` command with the
 accepted private configuration and target-local enrollment request. The existing
-distributed helper supplies only the default ignore source, so it cannot activate
-this custom projection. No runtime patch or unverified in-process activation is
-used. A later scoped pilot must explicitly project the same authority-approved
-ignore source to its targets.
+distributed helper supplies only the default ignore source. Explicit activation
+also supports a master's custom projection. No runtime patch or unverified
+in-process activation is used. A later scoped pilot must project the exact
+authority-approved ignore source to its targets.
 
 ## Workload and proof
 

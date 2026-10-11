@@ -8,6 +8,12 @@ A matching device/inode retains node identity or infers a move. After observing 
 
 `.codefoldersyncignore` is authority metadata rather than an ordinary event. `.codefoldersync`, `.workspace-sync`, and Git metadata are excluded. The signed synchronization policy filters leaves before their contents are captured; required ancestors are retained without including their unselected children. See [Synchronization policies](sync-policies.md).
 
+An ignore globstar followed by `/` matches zero or more directories. The
+generated `**/node_modules/` rule therefore excludes dependencies directly at
+the root and at every nested depth before repository discovery or file capture.
+Ignored data stays local through adoption and synchronization. No extra root
+rule is required.
+
 ## Source seal
 
 `adoption seal` requires the authority role, adoption lifecycle, and a non-empty verified backup witness. It force-scans the included source, durably queues the signed checkpoint, transfers missing immutable objects, and accepts it at the fresh hub. A second identical seal is idempotent; a different seal is rejected.

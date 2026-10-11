@@ -54,8 +54,13 @@ function parseRule(value: string): Rule {
     const character = body[index];
     if (character === "*") {
       if (body[index + 1] === "*") {
-        expression += ".*";
-        index += 1;
+        if (body[index + 2] === "/") {
+          expression += "(?:.*/)?";
+          index += 2;
+        } else {
+          expression += ".*";
+          index += 1;
+        }
       } else expression += "[^/]*";
     } else if (character === "?") expression += "[^/]";
     else expression += escapeRegExp(character ?? "");
