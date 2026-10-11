@@ -66,6 +66,12 @@ Startup validates that both paths remain within the root or state directory. If 
 
 New materialization happens in same-filesystem staging, verifies its manifest, and renames into place. Git metadata stays local. Restart accepts only a live tree composed of the recorded pre-apply and desired states; an unrelated edit stops recovery without overwriting it. A scoped apply proves the complete accepted digest against hub history before applying its eligible projection.
 
+Normal snapshot-apply recovery permits the old content of a moved-and-edited
+node at its accepted destination. It requires the same stable node identity,
+the destination recorded in the accepted manifest, and exact old content from
+the journal. Placement can finish before leaf replacement. An unrelated edit
+at that destination still blocks resume and remains untouched.
+
 A proved context change atomically partitions recovery intent before any filesystem rollback. The original transaction stays as `held-snapshot-apply`; affected move intents stay as `held-move`. Neither replays. Eligible siblings continue from the accepted projection while using the original move-staging root. A temporary unknown or locked context remains pending and resumes after it can be proved unchanged. Partial completion preserves waiting baselines and never rewinds an already newer global cursor. `recover-held <apply-id> --path <leaf> [--before]` recovers the accepted or pre-apply version under private state, not the live checkout.
 
 Source seal and cutover likewise retain durable intent across upload, unknown acknowledgement, hub acceptance, and local projection boundaries. Authority creation, peer enrollment, and peer configuration projection have their own exact journals so an interruption before or after hub/config acknowledgement resumes without generating a second folder or peer identity.

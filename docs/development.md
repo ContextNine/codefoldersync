@@ -14,12 +14,12 @@ pnpm check
 pnpm build
 ```
 
-`pnpm check` runs formatting validation, strict TypeScript, and the complete repository test suite. For iteration, run the focused V3 file directly, then run the full gate.
+`pnpm check` runs formatting validation, strict TypeScript, and the complete repository test suite. Test files run serially to bound temporary allocation. For iteration, run the focused V3 file directly, then run the full gate.
 
 When an active acceptance controller depends on the checkout's compiled helpers,
 check an exact disposable source copy instead of rebuilding those helpers in
-place. Run test files serially with `tsx --test --test-concurrency=1` when needed
-to bound temporary allocation. This changes scheduling, not assertions or corpus.
+place. Retain the default `tsx --test --test-concurrency=1` scheduling.
+This changes scheduling, not assertions or corpus.
 Count the copied source and every temporary directory against the active budget.
 
 Large test temporaries may live in an existing private bounded volume, but the

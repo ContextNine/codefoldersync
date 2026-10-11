@@ -2351,10 +2351,18 @@ function assertResumableSnapshotApply(
   const desiredByPath = new Map(
     desired.entries.map((entry) => [entry.path, entry]),
   );
+  const currentByNode = new Map(
+    current.entries.map((entry) => [entry.nodeId, entry]),
+  );
   for (const entry of live.entries)
     if (
       !sameContentOptional(entry, currentByPath.get(entry.path)) &&
-      !sameContentOptional(entry, desiredByPath.get(entry.path))
+      !sameContentOptional(entry, desiredByPath.get(entry.path)) &&
+      // Placement precedes leaf replacement for a moved-and-edited node.
+      !(
+        desiredByPath.get(entry.path)?.nodeId === entry.nodeId &&
+        sameContentOptional(entry, currentByNode.get(entry.nodeId))
+      )
     )
       throw new Error(
         `Local namespace changed during interrupted apply: ${entry.path}`,

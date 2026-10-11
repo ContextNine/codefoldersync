@@ -1154,8 +1154,14 @@ scenario(
         const nextMovingPath = join(authority.root, `moving-apply-${index}`);
         renameSync(movingPath, nextMovingPath);
         movingPath = nextMovingPath;
-        rmSync(obsoletePath);
-        obsoletePath = join(authority.root, `obsolete-apply-${index}.txt`);
+        const nextObsoletePath = join(
+          authority.root,
+          `obsolete-apply-${index}.txt`,
+        );
+        // Prove moved-and-edited recovery even without native inode reuse.
+        if (index === 3) renameSync(obsoletePath, nextObsoletePath);
+        else rmSync(obsoletePath);
+        obsoletePath = nextObsoletePath;
         writeFileSync(obsoletePath, `obsolete ${index}\n`);
         const addedDirectory = join(authority.root, `apply-directory-${index}`);
         mkdirSync(addedDirectory);
@@ -1205,6 +1211,24 @@ scenario(
           rmSync(lateEdit);
         }
 
+        if (index === 3) {
+          const movedLeaf = join(beta.root, `obsolete-apply-${index}.txt`);
+          const intermediate = readFileSync(movedLeaf, "utf8");
+          assert.equal(intermediate, "obsolete 2\n");
+          writeFileSync(movedLeaf, "late edit at moved destination\n");
+          const rejected = await syncFolderV3(beta);
+          assert.equal(rejected.status, "inconclusive");
+          assert.match(
+            rejected.reasons.join("\n"),
+            /changed during interrupted apply/u,
+          );
+          assert.equal(
+            readFileSync(movedLeaf, "utf8"),
+            "late edit at moved destination\n",
+          );
+          writeFileSync(movedLeaf, intermediate);
+        }
+
         assertSynced(await syncFolderV3(beta));
         using resumedState = new LocalState(beta);
         assert.equal(resumedState.journals().length, 0);
@@ -1221,6 +1245,10 @@ scenario(
             "utf8",
           ),
           `leaf ${index}\n`,
+        );
+        assert.equal(
+          readFileSync(join(beta.root, `obsolete-apply-${index}.txt`), "utf8"),
+          `obsolete ${index}\n`,
         );
         assert.equal(
           git(join(beta.root, "clients", "app"), ["rev-parse", "HEAD"]),
