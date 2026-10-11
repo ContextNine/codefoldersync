@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve, sep } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openDatabase } from "../database.js";
 import { canonicalJson, hashBytes, hashText } from "../v2/hash.js";
 import { loadConfig } from "./config.js";
 import type {
@@ -415,7 +415,7 @@ function proveLeaf(
 }
 
 function outboxCount(stateDir: string): number {
-  using database = new DatabaseSync(join(stateDir, "state.sqlite"), {
+  using database = openDatabase(join(stateDir, "state.sqlite"), {
     readOnly: true,
   });
   const row = database.prepare("SELECT COUNT(*) AS count FROM outbox").get();
@@ -424,7 +424,7 @@ function outboxCount(stateDir: string): number {
 }
 
 function pendingApplyCount(stateDir: string): number {
-  using database = new DatabaseSync(join(stateDir, "state.sqlite"), {
+  using database = openDatabase(join(stateDir, "state.sqlite"), {
     readOnly: true,
   });
   const row = database
@@ -437,7 +437,7 @@ function pendingApplyCount(stateDir: string): number {
 }
 
 function recoveryProbe(stateDir: string, local: string): string {
-  using database = new DatabaseSync(join(stateDir, "state.sqlite"), {
+  using database = openDatabase(join(stateDir, "state.sqlite"), {
     readOnly: true,
   });
   const row = database
@@ -483,7 +483,7 @@ function normalConflict(
 }
 
 function replaceProbeObject(path: string, id: string, bytes: Buffer): void {
-  using database = new DatabaseSync(join(path, "objects", "objects.sqlite"));
+  using database = openDatabase(join(path, "objects", "objects.sqlite"));
   const changed = database
     .prepare("UPDATE objects SET bytes=? WHERE id=?")
     .run(bytes, id);

@@ -1,5 +1,6 @@
 import { chmodSync, mkdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openDatabase } from "../database.js";
 import { join, resolve } from "node:path";
 import { hashJson } from "../v2/hash.js";
 import {
@@ -30,7 +31,7 @@ export class HubStore implements Disposable {
     this.root = resolve(root);
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     chmodSync(this.root, 0o700);
-    this.database = new DatabaseSync(join(this.root, "hub.sqlite"));
+    this.database = openDatabase(join(this.root, "hub.sqlite"));
     this.database.exec(
       "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
     );

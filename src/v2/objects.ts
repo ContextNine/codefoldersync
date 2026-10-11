@@ -17,7 +17,8 @@ import {
 } from "node:fs";
 import type { Stats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openDatabase } from "../database.js";
 import { dirname, join, resolve } from "node:path";
 import { brotliCompressSync, brotliDecompressSync, constants } from "node:zlib";
 import { canonicalJson, hashBytes, hashJson, assertHash } from "./hash.js";
@@ -53,7 +54,7 @@ export class ObjectStore implements Disposable {
   public constructor(root: string) {
     this.root = resolve(root);
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
-    this.database = new DatabaseSync(join(this.root, "objects.sqlite"));
+    this.database = openDatabase(join(this.root, "objects.sqlite"));
     this.database.exec(
       "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA temp_store=MEMORY;",
     );

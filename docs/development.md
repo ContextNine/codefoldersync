@@ -22,6 +22,12 @@ place. Retain the default `tsx --test --test-concurrency=1` scheduling.
 This changes scheduling, not assertions or corpus.
 Count the copied source and every temporary directory against the active budget.
 
+The active CLI loads native SQLite only when opening a database. Backup capture,
+ciphertext receipt and visibility observation do not need SQLite, and must not
+emit its Node 22 experimental-module warning. Keep other runtime and backup-tool
+warnings enabled. The existing backup and observer integration cases enforce
+clean successful diagnostics and strict rejection of tool warnings.
+
 Large test temporaries may live in an existing private bounded volume, but the
 native systemd fixture's paths must remain visible to the host user manager.
 Set `CODEFOLDERSYNC_TEST_NATIVE_CONTROL_ROOT` and

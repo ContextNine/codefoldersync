@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+import { openDatabase } from "../database.js";
 import { join } from "node:path";
 import { contentVersion, entryVersion } from "./mutations.js";
 import type { CatalogEntry, ConflictRecord, ProductConfig } from "./types.js";
@@ -9,7 +10,7 @@ export class LocalState implements Disposable {
 
   public constructor(config: ProductConfig) {
     mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
-    this.database = new DatabaseSync(join(config.stateDir, "state.sqlite"));
+    this.database = openDatabase(join(config.stateDir, "state.sqlite"));
     this.database.exec(
       "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
     );
