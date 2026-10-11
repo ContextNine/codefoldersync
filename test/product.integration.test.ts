@@ -32,7 +32,11 @@ import {
   reviseConfig,
   signPayload,
 } from "../src/v3/config.js";
-import { manifestObjectIds, scanNamespace } from "../src/v3/catalog.js";
+import {
+  manifestObjectIds,
+  scanNamespace,
+  validateNamespaceManifest,
+} from "../src/v3/catalog.js";
 import {
   HubStore,
   adoptionVerificationPayload,
@@ -78,6 +82,7 @@ import { HubTransport } from "../src/v3/transport.js";
 import { ObjectStore } from "../src/v3/objects.js";
 import { deriveMutations } from "../src/v3/mutations.js";
 import { promptFleetSetupSpecV3 } from "../src/v3/orchestrator.js";
+import { createTreeWitness } from "../src/v3/acceptance.js";
 
 interface ScenarioContext {
   readonly test: (
@@ -1280,8 +1285,9 @@ scenario(
         readFileSync(join(beta.root, "cafe\u0301.txt"), "utf8"),
         "unicode\n",
       );
-      assert.equal(existsSync(join(beta.root, "case-name.txt")), false);
-      assert.equal(existsSync(join(beta.root, "caf\u00e9.txt")), false);
+      const targetNames = readdirSync(beta.root);
+      assert.ok(targetNames.includes("Case-Name.txt"));
+      assert.ok(targetNames.includes("cafe\u0301.txt"));
       assert.equal(
         readFileSync(
           join(beta.root, "clients", "app", "node_modules", "local.txt"),
@@ -1366,8 +1372,84 @@ scenario(
       git(targetWorktree, ["commit", "-m", "local fixture"]);
       const targetHead = git(targetWorktree, ["rev-parse", "HEAD"]);
       const targetGitEntry = readFileSync(join(targetWorktree, ".git"), "utf8");
+      const moduleOrigin = join(fleet.base, "module-origin");
+      createRepository(moduleOrigin, "module baseline\n");
+      const gitStates = [];
+      for (const peer of [authority, beta]) {
+        const parent = join(peer.root, "parent-repository");
+        createRepository(parent, `${peer.peerName} parent baseline\n`);
+        git(parent, [
+          "-c",
+          "protocol.file.allow=always",
+          "submodule",
+          "add",
+          moduleOrigin,
+          "modules/library",
+        ]);
+        git(parent, ["commit", "-am", "contained submodule"]);
+        const linked = join(peer.root, "linked-worktree");
+        git(parent, ["worktree", "add", "-b", "local-linked", linked]);
+        for (const path of [parent, join(parent, "modules/library"), linked]) {
+          writeFileSync(
+            join(path, "README.md"),
+            `${peer.peerName} working content\n`,
+          );
+          gitStates.push({
+            path,
+            head: git(path, ["rev-parse", "HEAD"]),
+            index: git(path, ["ls-files", "--stage"]),
+            pointer: lstatSync(join(path, ".git")).isFile()
+              ? readFileSync(join(path, ".git"), "utf8")
+              : null,
+          });
+        }
+        gitStates.push({
+          path: parent,
+          metadata: await createTreeWitness(join(parent, ".git")),
+        });
+      }
       assertSynced(await syncFolderV3(authority));
       assertSynced(await syncFolderV3(beta));
+      // The target publishes keep-both versions of its independently dirty files.
+      assertSynced(await syncFolderV3(authority));
+      assertSynced(await syncFolderV3(beta));
+      for (const state of gitStates) {
+        if ("metadata" in state) {
+          assert.deepEqual(
+            await createTreeWitness(join(state.path, ".git")),
+            state.metadata,
+          );
+          continue;
+        }
+        assert.equal(git(state.path, ["rev-parse", "HEAD"]), state.head);
+        assert.equal(git(state.path, ["ls-files", "--stage"]), state.index);
+        if (state.pointer !== null)
+          assert.equal(
+            readFileSync(join(state.path, ".git"), "utf8"),
+            state.pointer,
+          );
+        git(state.path, ["fsck", "--full"]);
+      }
+      for (const path of [
+        "parent-repository",
+        "parent-repository/modules/library",
+        "linked-worktree",
+      ])
+        assert.equal(
+          readFileSync(join(beta.root, path, "README.md"), "utf8"),
+          `${authority.peerName} working content\n`,
+        );
+      const sourceVerification = await verifyFullV3(authority);
+      const targetVerification = await verifyFullV3(beta);
+      for (const verification of [sourceVerification, targetVerification]) {
+        assert.equal(verification.status, "conflict");
+        assert.ok(verification.conflicts > 0);
+        assert.deepEqual(verification.reasons, []);
+      }
+      assert.equal(
+        sourceVerification.hubSequence,
+        targetVerification.hubSequence,
+      );
       assert.equal(
         readFileSync(join(targetWorktree, ".git"), "utf8"),
         targetGitEntry,
@@ -1642,22 +1724,24 @@ scenario(
   async (context) => {
     await context.test("case aliases", () => {
       withScanFixture((root, config, objects) => {
-        writeFileSync(join(root, "Case.txt"), "upper\n");
-        writeFileSync(join(root, "case.txt"), "lower\n");
-        assert.throws(
-          () => scanNamespace(config, objects, ensureIgnore(root), [], true),
-          /Portable name collision/u,
+        assertPortableAliasRejected(
+          root,
+          config,
+          objects,
+          "Case.txt",
+          "case.txt",
         );
       });
     });
 
     await context.test("Unicode normalization aliases", () => {
       withScanFixture((root, config, objects) => {
-        writeFileSync(join(root, "é.txt"), "composed\n");
-        writeFileSync(join(root, "e\u0301.txt"), "decomposed\n");
-        assert.throws(
-          () => scanNamespace(config, objects, ensureIgnore(root), [], true),
-          /Portable name collision/u,
+        assertPortableAliasRejected(
+          root,
+          config,
+          objects,
+          "é.txt",
+          "e\u0301.txt",
         );
       });
     });
@@ -2194,7 +2278,11 @@ function git(root: string, args: readonly string[]): string {
     ],
     { encoding: "utf8" },
   );
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    result.status,
+    0,
+    `Git fixture command failed: ${args.join(" ")}\n${result.stderr}${result.stdout}`,
+  );
   return result.stdout.trim();
 }
 
@@ -2210,6 +2298,50 @@ function entryExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Test the manifest contract even when the native filesystem forbids alias pairs.
+function assertPortableAliasRejected(
+  root: string,
+  config: ProductConfig,
+  objects: ObjectStore,
+  first: string,
+  second: string,
+): void {
+  writeFileSync(join(root, first), "original\n", { flag: "wx" });
+  const ignore = ensureIgnore(root);
+  const { manifest } = scanNamespace(config, objects, ignore, [], true);
+  const entry = manifest.entries[0];
+  assert.ok(entry);
+  assert.throws(
+    () =>
+      validateNamespaceManifest({
+        ...manifest,
+        entries: [first, second].map((name) => ({
+          ...entry,
+          name,
+          path: name,
+          nodeId: randomUUID(),
+        })),
+      }),
+    /Portable alias collision/u,
+  );
+  try {
+    writeFileSync(join(root, second), "alias\n", { flag: "wx" });
+  } catch (error) {
+    assert.ok(error instanceof Error && "code" in error);
+    assert.equal(error.code, "EEXIST");
+    assert.equal(readFileSync(join(root, first), "utf8"), "original\n");
+    assert.equal(
+      scanNamespace(config, objects, ignore, [], true).manifest.entries.length,
+      1,
+    );
+    return;
+  }
+  assert.throws(
+    () => scanNamespace(config, objects, ignore, [], true),
+    /Portable name collision/u,
+  );
 }
 
 function withScanFixture(

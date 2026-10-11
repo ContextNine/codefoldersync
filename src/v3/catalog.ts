@@ -299,17 +299,18 @@ export function scanNamespace(
     }
   }
   const selectedPolicy = config.syncPolicy;
-  const includedEntries = entries.filter(
-    (entry) =>
-      entry.kind !== "directory" ||
-      includedParents.has(entry.path) ||
-      (policyIncludesDirectory(selectedPolicy, entry.path) &&
-        (scope === null || scopeIncludes(scope, entry.path)) &&
-        (readdirSync(join(root, entry.path)).length === 0 ||
-          logicalEmptyDirectories.has(entry.path))),
-  );
-  includedEntries.sort((left, right) =>
-    left.path.localeCompare(right.path, "en"),
+  // Empty included directories still need their complete physical parent chain.
+  const includedEntries = retainParents(
+    entries.filter(
+      (entry) =>
+        entry.kind !== "directory" ||
+        includedParents.has(entry.path) ||
+        (policyIncludesDirectory(selectedPolicy, entry.path) &&
+          (scope === null || scopeIncludes(scope, entry.path)) &&
+          (readdirSync(join(root, entry.path)).length === 0 ||
+            logicalEmptyDirectories.has(entry.path))),
+    ),
+    entries,
   );
   repositories.sort((left, right) => left.path.localeCompare(right.path, "en"));
   // A checkout during capture invalidates the proposal, even if its bytes hashed.

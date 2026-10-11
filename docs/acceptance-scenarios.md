@@ -29,6 +29,24 @@ Cutover is attempted only after both target verifications. The latest normal rev
 - ignored dependency churn producing no publication;
 - matching normal lifecycle revisions on every peer.
 
+Rename checks inspect actual directory-entry spelling instead of probing the
+old spelling, which still resolves on case-insensitive APFS. Portable alias
+checks always reject a colliding namespace manifest. They also reject native
+alias pairs where those pairs can coexist. Where exclusive creation returns
+`EEXIST`, the fixture proves that the original bytes and single scanned entry
+remain intact. No filesystem-dependent case is silently skipped.
+
+The contained Git-metadata scenario also creates a real local submodule and
+linked worktree on both peers. It synchronizes dirty working files while proving
+each peer retains its own HEAD, index, Git-pointer text, and complete parent Git
+metadata witness. Both peers force-verify against the same accepted checkpoint
+with no semantic mismatch and explicitly report their retained keep-both
+conflicts. Every repository passes `git fsck --full`. The fixture uses local file
+transport only.
+An uninitialized submodule in the linked checkout leaves a nested empty
+directory. The scanner retains every parent of that included empty directory,
+so the published namespace has valid parent identities.
+
 ### Failure controls
 
 The suite proves:
