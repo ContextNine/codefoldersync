@@ -43,6 +43,57 @@ const children = new Set();
 const workers = new Set();
 let interrupted = false;
 let step = role;
+const failurePrefix = "CFS_ARCHIVE_FAILURE ";
+const failureCodes = new Set([
+  "ENOSPC",
+  "EDQUOT",
+  "EIO",
+  "EACCES",
+  "EPERM",
+  "ENOENT",
+  "ERR_ASSERTION",
+  "command-failed",
+  "unknown",
+]);
+
+// Retain only enums and source locations, never messages, paths, or stderr.
+function failureRecord(error) {
+  if (error?.cause?.archiveFailure) return error.cause.archiveFailure;
+  const location = String(error?.stack).match(
+    /\/(?:dist\/v[23]\/|scripts\/)([a-z0-9_-]+\.(?:mjs|js)):(\d+):\d+/u,
+  );
+  return {
+    phase: step,
+    code: failureCodes.has(error?.code) ? error.code : "unknown",
+    ...(location ? { module: location[1], line: Number(location[2]) } : {}),
+  };
+}
+
+function readFailure(line) {
+  if (!line.startsWith(failurePrefix)) return undefined;
+  try {
+    const value = JSON.parse(line.slice(failurePrefix.length));
+    if (
+      !/^(?:preflight|candidate-install|seed-template|run-acceptance|volume-create|volume-grow|finalize|(?:download|restore|witness)-(?:mattbook|wootbook|workermacair))$/u.test(
+        value.phase,
+      ) ||
+      !failureCodes.has(value.code)
+    )
+      return undefined;
+    return {
+      phase: value.phase,
+      code: value.code,
+      ...(typeof value.module === "string" &&
+      /^[a-z0-9_-]+\.(?:mjs|js)$/u.test(value.module) &&
+      Number.isSafeInteger(value.line) &&
+      value.line >= 0
+        ? { module: value.module, line: value.line }
+        : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
     interrupted = true;
@@ -80,21 +131,30 @@ async function command(program, args, options = {}) {
     else excessive = true;
   });
   // Never publish command diagnostics, which can contain paths or values.
-  let coarseDiagnostic = "";
+  let childFailure;
+  let pendingDiagnostic = "";
   child.stderr.on("data", (chunk) => {
-    const safe = chunk
-      .toString("utf8")
-      .match(
-        /Bounded archived acceptance failed at [a-z0-9-]+ \(line \d+\)\./u,
-      );
-    if (safe) coarseDiagnostic = safe[0];
+    pendingDiagnostic += chunk.toString("utf8");
+    if (pendingDiagnostic.length > 8192) pendingDiagnostic = "";
+    const lines = pendingDiagnostic.split("\n");
+    pendingDiagnostic = lines.pop() ?? "";
+    for (const line of lines) childFailure = readFailure(line) ?? childFailure;
   });
   try {
-    const status = await new Promise((done, reject) => {
+    const outcome = await new Promise((done, reject) => {
       child.once("error", reject);
-      child.once("close", done);
+      child.once("close", (status, signal) => done({ status, signal }));
     });
-    assert.equal(status, 0, `Controller command failed. ${coarseDiagnostic}`);
+    if (outcome.status !== 0)
+      throw new Error("Controller command failed", {
+        cause: {
+          archiveFailure: {
+            ...(childFailure ?? { phase: step, code: "command-failed" }),
+            exitCode: outcome.status,
+            signal: outcome.signal,
+          },
+        },
+      });
     assert.equal(
       excessive,
       false,
@@ -260,7 +320,11 @@ async function controller() {
   let mounted = false;
   let passed = false;
   let report;
+  let restored;
+  let failure;
+  let storageAtFailure;
   try {
+    step = "volume-create";
     writeFileSync(join(outer, "SENTINEL"), `${spec.runId}\n`, {
       mode: 0o600,
       flag: "wx",
@@ -296,8 +360,9 @@ async function controller() {
     };
     const restoreControl = join(outer, "restore-control.json");
     writePrivate(restoreControl, control);
-    const restored = await unprivileged("restore", restoreControl);
+    restored = await unprivileged("restore", restoreControl);
     assert.equal(restored.passed, true);
+    step = "volume-grow";
     // Grow only after every external download was removed, before product runs.
     const mountedFs = JSON.parse(
       await command("findmnt", [
@@ -330,14 +395,29 @@ async function controller() {
     await command("btrfs", ["filesystem", "resize", "max", mount]);
     const runControl = join(outer, "run-control.json");
     writePrivate(runControl, { ...control, restored });
+    step = "run-acceptance";
     report = await unprivileged("run", runControl);
     assert.equal(report.passed, true);
+    step = "finalize";
     await command("sync", ["-f", mount]);
     await command("fstrim", [mount]);
     report.imageAllocatedBytes = lstatSync(image).blocks * 512;
     report.maximumTotalBytes = retainedBytes + finalMaximum + reserve;
     assert.ok(report.maximumTotalBytes <= storageLimits.wootbookHardBytes);
     passed = true;
+  } catch (error) {
+    failure = failureRecord(error);
+    if (mounted) {
+      const filesystem = statfsSync(mount);
+      storageAtFailure = {
+        availableBytes: filesystem.bavail * filesystem.bsize,
+        filesystemBytes: filesystem.blocks * filesystem.bsize,
+        imageAllocatedBytes: lstatSync(image).blocks * 512,
+        maximumImageBytes: finalMaximum,
+        retainedAllocatedBytes: retainedBytes,
+      };
+    }
+    throw error;
   } finally {
     assert.equal(children.size, 0, "Controller still has active children");
     // Cleanup commands must still run after a deferred interrupt.
@@ -354,9 +434,20 @@ async function controller() {
       schemaVersion: 1,
       runId: spec.runId,
       acceptanceCorpus: spec.corpus === "original-code-archive",
+      candidateSha256: spec.candidateSha256,
       passed,
       cleaned: true,
       removedAllocatedBytes: cleaned.removedAllocatedBytes,
+      ...(restored
+        ? {
+            historicalFormat: true,
+            historicalTrees: restored.masters.map(({ machineId, witness }) => ({
+              machineId,
+              witness,
+            })),
+          }
+        : {}),
+      ...(failure ? { failure, storageAtFailure } : {}),
       ...(passed ? report : {}),
     });
   }
@@ -576,6 +667,7 @@ async function run() {
     mode: 0o600,
     flag: "wx",
   });
+  step = "run-acceptance";
   const results = await runPseudoFleetAcceptanceV3({
     schemaVersion: 1,
     runId: spec.runId,
@@ -625,16 +717,8 @@ try {
   else if (role === "restore") await restore();
   else await run();
 } catch (error) {
-  const line =
-    String(error.stack).match(
-      /run_bounded_archived_acceptance\.mjs:(\d+)/u,
-    )?.[1] ?? "0";
-  const nested = String(error.message).match(
-    /Bounded archived acceptance failed at [a-z0-9-]+ \(line \d+\)\./u,
-  )?.[0];
-  if (nested) process.stderr.write(`${nested}\n`);
   process.stderr.write(
-    `Bounded archived acceptance failed at ${step} (line ${line}).\n`,
+    `${failurePrefix}${JSON.stringify(failureRecord(error))}\n`,
   );
   process.exitCode = 1;
 }

@@ -541,6 +541,19 @@ console.log(JSON.stringify(results));`;
   );
   assert.equal(rejectedEvidence.passed, false);
   assert.equal(rejectedEvidence.cleaned, true);
+  assert.equal(rejectedEvidence.candidateSha256, candidateSha256);
+  assert.equal(rejectedEvidence.failure.phase, "download-mattbook");
+  assert.equal(rejectedEvidence.failure.code, "ERR_ASSERTION");
+  assert.equal(rejectedEvidence.failure.exitCode, 1);
+  assert.equal(rejectedEvidence.failure.signal, null);
+  assert.ok(rejectedEvidence.failure.line > 0);
+  assert.ok(rejectedEvidence.storageAtFailure.availableBytes >= 0);
+  assert.ok(
+    rejectedEvidence.storageAtFailure.maximumImageBytes +
+      rejectedEvidence.storageAtFailure.retainedAllocatedBytes +
+      64 * 1024 ** 2 <=
+      512 * 1024 ** 2,
+  );
   for (const source of sources)
     assert.equal(
       createHash("sha256")
@@ -584,6 +597,7 @@ console.log(JSON.stringify(results));`;
       sequentialCiphertextSlotsCleaned: true,
       controllerVolumeCleaned: true,
       corruptedDownloadRejectedAndCleaned: true,
+      durableSanitizedFailureEvidence: true,
       originalFixtureCiphertextUnchanged: true,
       acceptanceCorpus: false,
     }) + "\n",
